@@ -84,15 +84,18 @@ export default function MemoryDetailPage({ token }: Props) {
     lineHeight: 1.45,
   };
 
-  function fmtDatePtBR(iso?: string) {
+  // ✅ Compacto: DD/MM/AAAA HH:MM (sem e-mail)
+  function fmtDateTimeCompactPtBR(iso?: string) {
     if (!iso) return "—";
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleDateString("pt-BR", {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-    });
+
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = String(d.getFullYear());
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
   }
 
   async function readJsonOrText(res: Response): Promise<any> {
@@ -137,7 +140,9 @@ export default function MemoryDetailPage({ token }: Props) {
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const txt = await res.text();
-        throw new Error(`Resposta não-JSON (${res.status}). Início: ${txt.slice(0, 80)}`);
+        throw new Error(
+          `Resposta não-JSON (${res.status}). Início: ${txt.slice(0, 80)}`
+        );
       }
 
       const m = await res.json();
@@ -181,18 +186,23 @@ export default function MemoryDetailPage({ token }: Props) {
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const txt = await res.text();
-        throw new Error(`Resposta não-JSON (${res.status}). Início: ${txt.slice(0, 80)}`);
+        throw new Error(
+          `Resposta não-JSON (${res.status}). Início: ${txt.slice(0, 80)}`
+        );
       }
 
       const json = await res.json();
-      const list: MemoryVersion[] = Array.isArray(json?.versions) ? json.versions : [];
+      const list: MemoryVersion[] = Array.isArray(json?.versions)
+        ? json.versions
+        : [];
       setVersions(list);
 
-      // inicializa seletores de diff de forma segura (sem interferir no restante)
-      const nums = list.map((x) => x.version_number).filter((x) => Number.isFinite(x));
+      // inicializa seletores de diff de forma segura
+      const nums = list
+        .map((x) => x.version_number)
+        .filter((x) => Number.isFinite(x));
       const uniqSorted = Array.from(new Set(nums)).sort((a, b) => a - b);
 
-      // Só seta defaults se ainda não houver escolha do usuário
       if (uniqSorted.length >= 2) {
         if (diffVA == null) setDiffVA(uniqSorted[uniqSorted.length - 2]);
         if (diffVB == null) setDiffVB(uniqSorted[uniqSorted.length - 1]);
@@ -280,7 +290,64 @@ export default function MemoryDetailPage({ token }: Props) {
     }
   }
 
-  // === DIFF helpers (não tocam em backend, só leitura) ===
+  // === ROLLBACK (restaurar versão criando nova) ===
+  async function restoreVersion(v: MemoryVersion) {
+    if (!memoryIdNum) return;
+    if (!canEdit) return;
+
+    const ok = window.confirm(
+      `Restaurar a versão v${v.version_number}?\n\n` +
+        `Isso criará uma NOVA versão baseada nessa versão.\n` +
+        `O histórico não será apagado.`
+    );
+
+    if (!ok) return;
+
+    setErrorEdit(null);
+    setSuccessEdit(null);
+    setSavingEdit(true);
+
+    try {
+      const payload = {
+        title: (v.title ?? "").trim() || null,
+        content: (v.content ?? "").trim(),
+      };
+
+      if (!payload.content) {
+        throw new Error("Não é possível restaurar uma versão sem conteúdo.");
+      }
+
+      const res = await fetch(`/api/memories/${memoryIdNum}`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        const payloadErr = await readJsonOrText(res);
+        const msg = messageFromErrorPayload(payloadErr);
+        throw new Error(msg || `HTTP ${res.status}`);
+      }
+
+      await loadDetail();
+      await loadVersions();
+
+      setSuccessEdit(
+        `Rollback criado: nova versão baseada na v${v.version_number}.`
+      );
+    } catch (e: any) {
+      console.error(e);
+      setErrorEdit(e?.message ?? "Erro ao restaurar versão.");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  // === DIFF helpers (só leitura) ===
   function getVersionContent(vn: number | null): string {
     if (vn == null) return "";
     const v = versions.find((x) => x.version_number === vn);
@@ -299,7 +366,6 @@ export default function MemoryDetailPage({ token }: Props) {
       const right = bL[i] ?? "";
 
       if (left === right) {
-        // Mantém eq só se não for linha vazia (evita poluição visual)
         if (left.trim() !== "") out.push({ t: "eq", v: left });
         continue;
       }
@@ -313,7 +379,9 @@ export default function MemoryDetailPage({ token }: Props) {
 
   const canCompare = versions.length >= 1 && diffVA != null && diffVB != null;
   const diffRows: DiffRow[] =
-    showDiff && canCompare ? diffLines(getVersionContent(diffVA), getVersionContent(diffVB)) : [];
+    showDiff && canCompare
+      ? diffLines(getVersionContent(diffVA), getVersionContent(diffVB))
+      : [];
 
   useEffect(() => {
     loadDetail();
@@ -327,7 +395,8 @@ export default function MemoryDetailPage({ token }: Props) {
       memory?.versionNumber ??
       1) as number;
 
-  const canEdit = memory?.raw?.meta?.can_edit ?? memory?.raw?.meta?.canEdit ?? false;
+  const canEdit =
+    memory?.raw?.meta?.can_edit ?? memory?.raw?.meta?.canEdit ?? false;
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
@@ -335,43 +404,88 @@ export default function MemoryDetailPage({ token }: Props) {
         ← Voltar
       </button>
 
-      {(loadingDetail || loadingVersions) && <p style={{ opacity: 0.75 }}>Carregando...</p>}
+      {(loadingDetail || loadingVersions) && (
+        <p style={{ opacity: 0.75 }}>Carregando...</p>
+      )}
 
       {errorDetail && <p style={{ color: "crimson" }}>{errorDetail}</p>}
 
-      {!errorDetail && !loadingDetail && !memory && <p style={{ opacity: 0.75 }}>Memória não encontrada.</p>}
+      {!errorDetail && !loadingDetail && !memory && (
+        <p style={{ opacity: 0.75 }}>Memória não encontrada.</p>
+      )}
 
       {memory && (
         <>
-          {/* Cabeçalho investor-grade */}
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+          {/* Cabeçalho */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
             <div style={{ minWidth: 260 }}>
               <h1 style={{ marginBottom: 6, fontSize: 28, lineHeight: 1.15 }}>
                 {memory.title || "(sem título)"}
               </h1>
               <div style={subtle}>
-                Criada em <strong>{fmtDatePtBR(memory.createdAt)}</strong>
+                Criada em{" "}
+                <strong>{fmtDateTimeCompactPtBR(memory.createdAt)}</strong>
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "flex-start",
+                flexWrap: "wrap",
+              }}
+            >
               <span style={badge}>v{currentVersion}</span>
               {canEdit && <span style={badge}>Editável</span>}
-              {memory.authorId != null && <span style={badge}>Autor {String(memory.authorId)}</span>}
+              {memory.authorId != null && (
+                <span style={badge}>Autor {String(memory.authorId)}</span>
+              )}
               {memory.isDeleted && (
-                <span style={{ ...badge, borderColor: "#f3bcbc", background: "#fff5f5" }}>Apagada</span>
+                <span
+                  style={{
+                    ...badge,
+                    borderColor: "#f3bcbc",
+                    background: "#fff5f5",
+                  }}
+                >
+                  Apagada
+                </span>
               )}
             </div>
           </div>
 
           {/* Ações */}
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 14 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+              marginTop: 14,
+            }}
+          >
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button onClick={loadDetail} disabled={loadingDetail} style={{ fontSize: 12 }}>
+              <button
+                onClick={loadDetail}
+                disabled={loadingDetail}
+                style={{ fontSize: 12 }}
+              >
                 {loadingDetail ? "Atualizando..." : "Recarregar detalhe"}
               </button>
 
-              <button onClick={loadVersions} disabled={loadingVersions} style={{ fontSize: 12 }}>
+              <button
+                onClick={loadVersions}
+                disabled={loadingVersions}
+                style={{ fontSize: 12 }}
+              >
                 {loadingVersions ? "Atualizando..." : "Recarregar versões"}
               </button>
             </div>
@@ -459,15 +573,28 @@ export default function MemoryDetailPage({ token }: Props) {
             }}
           >
             <div style={{ opacity: 0.65, fontSize: 12, marginBottom: 8 }}>
-              {editing ? "Edição (salvar cria nova versão)" : "Conteúdo (estado atual)"}
+              {editing
+                ? "Edição (salvar cria nova versão)"
+                : "Conteúdo (estado atual)"}
             </div>
 
             {!editing ? (
-              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{memory.content || "(vazio)"}</div>
+              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>
+                {memory.content || "(vazio)"}
+              </div>
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.75, marginBottom: 6 }}>Título</div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 800,
+                      opacity: 0.75,
+                      marginBottom: 6,
+                    }}
+                  >
+                    Título
+                  </div>
                   <input
                     value={draftTitle}
                     onChange={(e) => setDraftTitle(e.target.value)}
@@ -478,7 +605,16 @@ export default function MemoryDetailPage({ token }: Props) {
                 </div>
 
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.75, marginBottom: 6 }}>Conteúdo *</div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 800,
+                      opacity: 0.75,
+                      marginBottom: 6,
+                    }}
+                  >
+                    Conteúdo *
+                  </div>
                   <textarea
                     value={draftContent}
                     onChange={(e) => setDraftContent(e.target.value)}
@@ -489,7 +625,8 @@ export default function MemoryDetailPage({ token }: Props) {
                 </div>
 
                 <div style={{ ...subtle }}>
-                  Ao salvar, o HDUD registra uma <strong>nova versão</strong> (timeline) — não sobrescreve versões anteriores.
+                  Ao salvar, o HDUD registra uma <strong>nova versão</strong>{" "}
+                  (timeline) — não sobrescreve versões anteriores.
                 </div>
               </div>
             )}
@@ -497,9 +634,20 @@ export default function MemoryDetailPage({ token }: Props) {
 
           {/* Timeline */}
           <div style={{ marginTop: 28 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "baseline",
+                gap: 12,
+              }}
+            >
               <h3 style={{ margin: 0 }}>Linha do Tempo (Versões)</h3>
-              <button onClick={loadVersions} disabled={loadingVersions} style={{ fontSize: 12 }}>
+              <button
+                onClick={loadVersions}
+                disabled={loadingVersions}
+                style={{ fontSize: 12 }}
+              >
                 {loadingVersions ? "Atualizando..." : "Recarregar versões"}
               </button>
             </div>
@@ -507,7 +655,9 @@ export default function MemoryDetailPage({ token }: Props) {
             <p style={{ marginTop: 6, ...subtle }}>
               Versão atual: <strong>v{currentVersion}</strong>
               {" • "}
-              {versions.length > 0 ? `${versions.length} versão(ões) registradas` : "nenhuma versão registrada ainda"}
+              {versions.length > 0
+                ? `${versions.length} versão(ões) registradas`
+                : "nenhuma versão registrada ainda"}
             </p>
 
             {errorVersions && <p style={{ color: "crimson" }}>{errorVersions}</p>}
@@ -522,8 +672,13 @@ export default function MemoryDetailPage({ token }: Props) {
                   background: "#fafafa",
                 }}
               >
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>Nenhuma versão encontrada</div>
-                <div style={subtle}>Edite e salve esta memória para gerar a primeira versão no histórico.</div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  Nenhuma versão encontrada
+                </div>
+                <div style={subtle}>
+                  Edite e salve esta memória para gerar a primeira versão no
+                  histórico.
+                </div>
               </div>
             ) : (
               <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
@@ -537,25 +692,84 @@ export default function MemoryDetailPage({ token }: Props) {
                       background: "#fff",
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 8,
+                          alignItems: "center",
+                          flexWrap: "wrap",
+                        }}
+                      >
                         <span style={badge}>v{v.version_number}</span>
-                        <span style={{ fontWeight: 600 }}>{v.title || "(sem título)"}</span>
+                        <span style={{ fontWeight: 600 }}>
+                          {v.title || "(sem título)"}
+                        </span>
                         {v.version_number === currentVersion && (
-                          <span style={{ ...badge, borderColor: "#cce6d0", background: "#f3fff5" }}>Atual</span>
+                          <span
+                            style={{
+                              ...badge,
+                              borderColor: "#cce6d0",
+                              background: "#f3fff5",
+                            }}
+                          >
+                            Atual
+                          </span>
                         )}
                       </div>
+
+                      {/* ✅ compactado */}
                       <div style={subtle}>
-                        {fmtDatePtBR(v.created_at)} {v.created_by ? `• ${v.created_by}` : ""}
+                        {fmtDateTimeCompactPtBR(v.created_at)}
                       </div>
                     </div>
 
                     <div style={{ marginTop: 8, ...subtle }}>
-                      <div style={{ opacity: 0.75, fontSize: 12, marginBottom: 6 }}>Snapshot</div>
-                      <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.45, color: "#222" }}>
+                      <div
+                        style={{
+                          opacity: 0.75,
+                          fontSize: 12,
+                          marginBottom: 6,
+                        }}
+                      >
+                        Snapshot
+                      </div>
+                      <div
+                        style={{
+                          whiteSpace: "pre-wrap",
+                          lineHeight: 1.45,
+                          color: "#222",
+                        }}
+                      >
                         {v.content || "(vazio)"}
                       </div>
                     </div>
+
+                    {canEdit && v.version_number !== currentVersion && (
+                      <button
+                        onClick={() => restoreVersion(v)}
+                        disabled={savingEdit}
+                        style={{
+                          marginTop: 10,
+                          padding: "6px 10px",
+                          borderRadius: 10,
+                          border: "1px solid #0f172a",
+                          background: "white",
+                          fontWeight: 800,
+                          fontSize: 12,
+                          cursor: savingEdit ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        🔁 Restaurar esta versão
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -569,15 +783,33 @@ export default function MemoryDetailPage({ token }: Props) {
                 paddingTop: 14,
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
                 <div>
-                  <div style={{ fontSize: 16, fontWeight: 900 }}>Comparar versões</div>
+                  <div style={{ fontSize: 16, fontWeight: 900 }}>
+                    Comparar versões
+                  </div>
                   <div style={{ fontSize: 12, opacity: 0.7 }}>
-                    Selecione duas versões e veja o que foi adicionado/removido (diff por linhas).
+                    Selecione duas versões e veja o que foi adicionado/removido
+                    (diff por linhas).
                   </div>
                 </div>
 
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
                   <select
                     value={diffVA ?? ""}
                     onChange={(e) => {
@@ -585,7 +817,11 @@ export default function MemoryDetailPage({ token }: Props) {
                       setDiffVA(Number.isFinite(v) ? v : null);
                       setShowDiff(false);
                     }}
-                    style={{ padding: "8px 10px", borderRadius: 10, border: "1px solid #d7dbe7" }}
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      border: "1px solid #d7dbe7",
+                    }}
                   >
                     <option value="">Versão A</option>
                     {versions
@@ -606,7 +842,11 @@ export default function MemoryDetailPage({ token }: Props) {
                       setDiffVB(Number.isFinite(v) ? v : null);
                       setShowDiff(false);
                     }}
-                    style={{ padding: "8px 10px", borderRadius: 10, border: "1px solid #d7dbe7" }}
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      border: "1px solid #d7dbe7",
+                    }}
                   >
                     <option value="">Versão B</option>
                     {versions
@@ -664,23 +904,48 @@ export default function MemoryDetailPage({ token }: Props) {
                     background: "#fff",
                   }}
                 >
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 10,
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      marginBottom: 10,
+                    }}
+                  >
                     <span style={badge}>A: v{diffVA}</span>
                     <span style={badge}>B: v{diffVB}</span>
                     <span style={{ ...subtle }}>
-                      🟢 adições • 🔴 remoções • linhas iguais são omitidas para ficar legível
+                      🟢 adições • 🔴 remoções • linhas iguais são omitidas para
+                      ficar legível
                     </span>
                   </div>
 
                   {diffRows.length === 0 ? (
-                    <div style={subtle}>Nenhuma diferença detectada (ou conteúdo vazio nas versões selecionadas).</div>
+                    <div style={subtle}>
+                      Nenhuma diferença detectada (ou conteúdo vazio nas versões
+                      selecionadas).
+                    </div>
                   ) : (
-                    <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}>
+                    <div
+                      style={{
+                        fontFamily:
+                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                      }}
+                    >
                       {diffRows.map((row, idx) => {
                         const isAdd = row.t === "add";
                         const isDel = row.t === "del";
-                        const color = isAdd ? "#145a20" : isDel ? "#a31212" : "#222";
-                        const bg = isAdd ? "#f3fff5" : isDel ? "#fff5f5" : "transparent";
+                        const color = isAdd
+                          ? "#145a20"
+                          : isDel
+                          ? "#a31212"
+                          : "#222";
+                        const bg = isAdd
+                          ? "#f3fff5"
+                          : isDel
+                          ? "#fff5f5"
+                          : "transparent";
                         const prefix = isAdd ? "+ " : isDel ? "- " : "  ";
 
                         return (
