@@ -1,0 +1,28 @@
+﻿# ---------- build ----------
+FROM node:20-alpine AS build
+WORKDIR /work
+
+# Copia o SDK primeiro (pra existir na hora de instalar deps do web)
+COPY hdud-api-node/sdk/hdud-sdk ./hdud-api-node/sdk/hdud-sdk
+
+# Copia manifests do web
+COPY hdud-web-app/package.json hdud-web-app/pnpm-lock.yaml* ./hdud-web-app/
+
+WORKDIR /work/hdud-web-app
+
+# Instala deps e FORÇA registrar o SDK local no node_modules
+RUN corepack enable \
+  && pnpm install --frozen-lockfile || pnpm install \
+  && pnpm add @hdud/sdk@file:../hdud-api-node/sdk/hdud-sdk
+
+# Copia o restante do web e builda
+COPY hdud-web-app/ ./
+RUN pnpm build
+
+# ---------- runtime ----------
+FROM nginx:alpine
+COPY hdud-web-app/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /work/hdud-web-app/dist /usr/share/nginx/html
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
