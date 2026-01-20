@@ -1,9 +1,20 @@
-import { useEffect, useState } from "react";
+// C:\HDUD_DATA\hdud-web-app\src\App.tsx
+
+import { useEffect, useMemo, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 
 import Login from "./auth/Login";
 import MemoriesPage from "./memories/MemoriesPage";
 import MemoryDetailPage from "./memories/MemoryDetailPage";
+
+import AppShell from "./layouts/AppShell";
+
+import DashboardPage from "./pages/DashboardPage";
+import FeedPage from "./pages/FeedPage";
+import ChaptersPage from "./pages/ChaptersPage";
+import TimelinePage from "./pages/TimelinePage";
+import ProfilePage from "./pages/ProfilePage";
+import SettingsPage from "./pages/SettingsPage";
 
 const TOKEN_KEY = "hdud_access_token";
 
@@ -20,25 +31,42 @@ export default function App() {
     setToken(accessToken);
   }
 
-function handleLogout() {
-  localStorage.removeItem("hdud_access_token");
-  window.location.href = "/";
-}
+  function handleLogout() {
+    localStorage.removeItem(TOKEN_KEY);
+    window.location.href = "/";
+  }
 
-  if (!token) {
+  const isLoggedIn = useMemo(() => Boolean(token), [token]);
+
+  if (!isLoggedIn || !token) {
     return <Login onLoggedIn={handleLoggedIn} />;
   }
 
   return (
     <Routes>
-      <Route
-        path="/memories"
-        element={<MemoriesPage token={token} onLogout={handleLogout} />}
-      />
-      <Route path="/memories/:id" element={<MemoryDetailPage token={token} />} />
+      {/* AppShell (somente estado logado) */}
+      <Route element={<AppShell onLogout={handleLogout} />}>
+        {/* Landing oficial */}
+        <Route path="/dashboard" element={<DashboardPage />} />
 
-      <Route path="/" element={<Navigate to="/memories" replace />} />
-      <Route path="*" element={<Navigate to="/memories" replace />} />
+        {/* placeholders (sem tocar no core) */}
+        <Route path="/feed" element={<FeedPage />} />
+        <Route path="/chapters" element={<ChaptersPage />} />
+        <Route path="/timeline" element={<TimelinePage />} />
+        <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+
+        {/* Core preservado */}
+        <Route
+          path="/memories"
+          element={<MemoriesPage token={token} onLogout={handleLogout} />}
+        />
+        <Route path="/memories/:id" element={<MemoryDetailPage token={token} />} />
+
+        {/* Defaults: tudo cai no dashboard */}
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Route>
     </Routes>
   );
 }
