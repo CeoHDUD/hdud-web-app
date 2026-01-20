@@ -1,7 +1,7 @@
 // C:\HDUD_DATA\hdud-web-app\src\components\Topbar.tsx
 
 import React from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 
 type Props = {
   onLogout: () => void;
@@ -20,8 +20,6 @@ function titleFromPath(pathname: string) {
 
 export default function Topbar({ onLogout }: Props) {
   const location = useLocation();
-  const navigate = useNavigate();
-
   const title = titleFromPath(location.pathname);
 
   return (
@@ -49,20 +47,6 @@ export default function Topbar({ onLogout }: Props) {
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button
           type="button"
-          onClick={() => navigate("/memories")}
-          style={{
-            border: "1px solid var(--border)",
-            background: "var(--surface)",
-            padding: "8px 10px",
-            borderRadius: 12,
-            cursor: "pointer",
-          }}
-        >
-          Ir p/ Memórias
-        </button>
-
-        <button
-          type="button"
           onClick={onLogout}
           style={{
             border: "1px solid var(--border)",
@@ -71,6 +55,7 @@ export default function Topbar({ onLogout }: Props) {
             padding: "8px 10px",
             borderRadius: 12,
             cursor: "pointer",
+            fontWeight: 800,
           }}
         >
           Sair

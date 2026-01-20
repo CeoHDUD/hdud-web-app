@@ -18,12 +18,29 @@ import SettingsPage from "./pages/SettingsPage";
 
 const TOKEN_KEY = "hdud_access_token";
 
+// ✅ Theme vNext (global, seguro, reversível, sem tocar no core)
+const THEME_KEY = "hdud_theme";
+type Theme = "light" | "dark";
+
+function applyTheme(theme: Theme) {
+  // aplica no <html>, para CSS global reagir com seletor [data-theme="..."]
+  document.documentElement.setAttribute("data-theme", theme);
+}
+
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
+
+  // ✅ Theme state (default: light/creme)
+  const [theme, setTheme] = useState<Theme>("light");
 
   useEffect(() => {
     const t = localStorage.getItem(TOKEN_KEY);
     if (t) setToken(t);
+
+    // Theme: carrega persistido; default = light
+    const savedTheme = (localStorage.getItem(THEME_KEY) as Theme | null) ?? "light";
+    setTheme(savedTheme);
+    applyTheme(savedTheme);
   }, []);
 
   function handleLoggedIn(accessToken: string) {
@@ -34,6 +51,13 @@ export default function App() {
   function handleLogout() {
     localStorage.removeItem(TOKEN_KEY);
     window.location.href = "/";
+  }
+
+  // ✅ API local para SettingsPage (sem mexer em auth/memories/core)
+  function handleThemeChange(next: Theme) {
+    setTheme(next);
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
   }
 
   const isLoggedIn = useMemo(() => Boolean(token), [token]);
@@ -54,7 +78,12 @@ export default function App() {
         <Route path="/chapters" element={<ChaptersPage />} />
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/settings" element={<SettingsPage />} />
+
+        {/* ✅ Settings com toggle de tema */}
+        <Route
+          path="/settings"
+          element={<SettingsPage theme={theme} onThemeChange={handleThemeChange} />}
+        />
 
         {/* Core preservado */}
         <Route

@@ -1,12 +1,13 @@
 ﻿/* C:\HDUD_DATA\hdud-web-app\src\styles\global.css */
 
-/* HDUD — Tema padrão (Light/Creme) + base de layout
-   - Minimalista e seguro (sem dependências)
-   - Preparado para evoluir para Dark via data-theme no futuro
+/* HDUD — Tema padrão (Light/Creme) + Dark (via <html data-theme="dark">)
+   - Tokens globais para manter toda a plataforma coesa
+   - Compatível com o que já existe (.hdud-page/.hdud-card etc.)
+   - Adiciona tokens --hdud-* para as telas (Memórias/Detalhe/Settings) obedecerem o tema
 */
 
 :root {
-  /* Light/Creme (default) */
+  /* ===== Base (Light/Creme default) ===== */
   --bg: #fbf7ef;          /* creme/papel */
   --surface: #ffffff;     /* cartões */
   --surface-2: #f6f0e4;   /* variação creme */
@@ -25,9 +26,44 @@
 
   --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
     Arial, "Apple Color Emoji", "Segoe UI Emoji";
+
+  /* ===== Tokens HDUD (consumidos pelas telas) ===== */
+  --hdud-bg: var(--bg);
+  --hdud-surface: var(--surface);
+  --hdud-surface-2: var(--surface-2);
+
+  --hdud-text: var(--text);
+  --hdud-text-2: color-mix(in srgb, var(--text) 70%, transparent);
+  --hdud-text-3: color-mix(in srgb, var(--text) 88%, transparent);
+
+  --hdud-border: color-mix(in srgb, var(--text) 14%, transparent);
+  --hdud-border-soft: color-mix(in srgb, var(--text) 10%, transparent);
+
+  --hdud-shadow: var(--shadow);
+
+  --hdud-accent-bg: color-mix(in srgb, #4f46e5 12%, var(--surface));
+  --hdud-accent-border: color-mix(in srgb, #4f46e5 20%, transparent);
+
+  --hdud-btn-primary-bg: var(--primary);
+  --hdud-btn-primary-text: var(--primary-contrast);
+  --hdud-btn-disabled: #9aa3b2;
+
+  --hdud-danger: #b91c1c;
+
+  --hdud-ok-bg: color-mix(in srgb, #22c55e 10%, var(--surface));
+  --hdud-ok-border: color-mix(in srgb, #22c55e 28%, transparent);
+  --hdud-ok-text: color-mix(in srgb, #16a34a 90%, var(--text));
+
+  --hdud-err-bg: color-mix(in srgb, #ef4444 10%, var(--surface));
+  --hdud-err-border: color-mix(in srgb, #ef4444 30%, transparent);
+  --hdud-err-text: #b91c1c;
+
+  --hdud-badge-bg: color-mix(in srgb, var(--surface-2) 70%, var(--surface));
+  --hdud-badge-border: color-mix(in srgb, var(--text) 16%, transparent);
+  --hdud-badge-text: var(--hdud-text);
 }
 
-/* Futuro (opcional): tema dark via <html data-theme="dark"> */
+/* Tema Dark via <html data-theme="dark"> */
 html[data-theme="dark"] {
   --bg: #0b0f14;
   --surface: #111827;
@@ -35,13 +71,26 @@ html[data-theme="dark"] {
   --text: #e5e7eb;
   --muted: #9ca3af;
   --border: rgba(229, 231, 235, 0.14);
+
   --primary: #e5e7eb;
   --primary-contrast: #0b0f14;
+
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+
+  /* Ajustes finos no Dark (deixa mais “plataforma”) */
+  --hdud-accent-bg: color-mix(in srgb, #60a5fa 10%, var(--surface));
+  --hdud-accent-border: color-mix(in srgb, #60a5fa 22%, transparent);
+
+  --hdud-btn-disabled: color-mix(in srgb, #94a3b8 60%, #111827);
+  --hdud-danger: #f87171;
+
+  --hdud-ok-text: #86efac;
+  --hdud-err-text: #fca5a5;
 }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+
 body {
   margin: 0;
   font-family: var(--font);
@@ -76,4 +125,20 @@ button, input, textarea { font: inherit; }
   margin: 0;
   color: var(--muted);
   line-height: 1.45;
+}
+
+/* Botão padrão (usado em Settings e em outros lugares) */
+.hdud-btn {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--hdud-border);
+  background: var(--hdud-surface);
+  color: var(--hdud-text);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.hdud-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
 }

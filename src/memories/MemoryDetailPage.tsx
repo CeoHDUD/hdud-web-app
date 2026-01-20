@@ -1,3 +1,5 @@
+// C:\HDUD_DATA\hdud-web-app\src\memories\MemoryDetailPage.tsx
+
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -56,24 +58,52 @@ export default function MemoryDetailPage({ token }: Props) {
     return Number.isFinite(n) ? n : null;
   }, [id]);
 
+  // ✅ Tokens de tema com fallback
+  const t = useMemo(() => {
+    return {
+      pageBg: "var(--hdud-bg, #f6f7fb)",
+      surface: "var(--hdud-surface, #ffffff)",
+      surface2: "var(--hdud-surface-2, #fafafa)",
+      text: "var(--hdud-text, #0f172a)",
+      text2: "var(--hdud-text-2, #666666)",
+      text3: "var(--hdud-text-3, #222222)",
+      border: "var(--hdud-border, #d7dbe7)",
+      borderSoft: "var(--hdud-border-soft, #eeeeee)",
+      shadow: "var(--hdud-shadow, 0 14px 30px rgba(20,20,40,.08))",
+      btnPrimaryBg: "var(--hdud-btn-primary-bg, #0f172a)",
+      btnPrimaryText: "var(--hdud-btn-primary-text, #ffffff)",
+      mutedBadgeBg: "var(--hdud-badge-bg, #fafafa)",
+      mutedBadgeBorder: "var(--hdud-badge-border, #dddddd)",
+      mutedBadgeText: "var(--hdud-badge-text, #222222)",
+      okBg: "var(--hdud-ok-bg, #f3fff5)",
+      okBorder: "var(--hdud-ok-border, #cce6d0)",
+      okText: "var(--hdud-ok-text, #145a20)",
+      errBg: "var(--hdud-err-bg, #fff5f5)",
+      errBorder: "var(--hdud-err-border, #f3bcbc)",
+      errText: "var(--hdud-err-text, #a31212)",
+    };
+  }, []);
+
   const badge: CSSProperties = {
-    border: "1px solid #ddd",
+    border: `1px solid ${t.mutedBadgeBorder}`,
     borderRadius: 999,
     padding: "4px 10px",
     fontSize: 12,
-    background: "#fafafa",
-    color: "#222",
+    background: t.mutedBadgeBg,
+    color: t.mutedBadgeText,
   };
 
-  const subtle: CSSProperties = { color: "#666", fontSize: 13 };
+  const subtle: CSSProperties = { color: t.text2, fontSize: 13 };
 
   const input: CSSProperties = {
     width: "100%",
     padding: "12px 12px",
     borderRadius: 12,
-    border: "1px solid #d7dbe7",
+    border: `1px solid ${t.border}`,
     outline: "none",
     fontSize: 14,
+    background: t.surface,
+    color: t.text,
   };
 
   const textarea: CSSProperties = {
@@ -140,9 +170,7 @@ export default function MemoryDetailPage({ token }: Props) {
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const txt = await res.text();
-        throw new Error(
-          `Resposta não-JSON (${res.status}). Início: ${txt.slice(0, 80)}`
-        );
+        throw new Error(`Resposta não-JSON (${res.status}). Início: ${txt.slice(0, 80)}`);
       }
 
       const m = await res.json();
@@ -186,21 +214,15 @@ export default function MemoryDetailPage({ token }: Props) {
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const txt = await res.text();
-        throw new Error(
-          `Resposta não-JSON (${res.status}). Início: ${txt.slice(0, 80)}`
-        );
+        throw new Error(`Resposta não-JSON (${res.status}). Início: ${txt.slice(0, 80)}`);
       }
 
       const json = await res.json();
-      const list: MemoryVersion[] = Array.isArray(json?.versions)
-        ? json.versions
-        : [];
+      const list: MemoryVersion[] = Array.isArray(json?.versions) ? json.versions : [];
       setVersions(list);
 
       // inicializa seletores de diff de forma segura
-      const nums = list
-        .map((x) => x.version_number)
-        .filter((x) => Number.isFinite(x));
+      const nums = list.map((x) => x.version_number).filter((x) => Number.isFinite(x));
       const uniqSorted = Array.from(new Set(nums)).sort((a, b) => a - b);
 
       if (uniqSorted.length >= 2) {
@@ -336,9 +358,7 @@ export default function MemoryDetailPage({ token }: Props) {
       await loadDetail();
       await loadVersions();
 
-      setSuccessEdit(
-        `Rollback criado: nova versão baseada na v${v.version_number}.`
-      );
+      setSuccessEdit(`Rollback criado: nova versão baseada na v${v.version_number}.`);
     } catch (e: any) {
       console.error(e);
       setErrorEdit(e?.message ?? "Erro ao restaurar versão.");
@@ -379,9 +399,7 @@ export default function MemoryDetailPage({ token }: Props) {
 
   const canCompare = versions.length >= 1 && diffVA != null && diffVB != null;
   const diffRows: DiffRow[] =
-    showDiff && canCompare
-      ? diffLines(getVersionContent(diffVA), getVersionContent(diffVB))
-      : [];
+    showDiff && canCompare ? diffLines(getVersionContent(diffVA), getVersionContent(diffVB)) : [];
 
   useEffect(() => {
     loadDetail();
@@ -395,586 +413,586 @@ export default function MemoryDetailPage({ token }: Props) {
       memory?.versionNumber ??
       1) as number;
 
-  const canEdit =
-    memory?.raw?.meta?.can_edit ?? memory?.raw?.meta?.canEdit ?? false;
+  const canEdit = memory?.raw?.meta?.can_edit ?? memory?.raw?.meta?.canEdit ?? false;
+
+  // ✅ Breadcrumb label (seguro mesmo antes do detail carregar)
+  const breadcrumbLabel = (memory?.title ?? "").trim()
+    ? (memory!.title as string)
+    : memoryIdNum != null
+      ? `#${memoryIdNum}`
+      : id
+        ? `#${id}`
+        : "#";
 
   return (
-    <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
-      <button onClick={() => nav("/memories")} style={{ marginBottom: 16 }}>
-        ← Voltar
-      </button>
-
-      {(loadingDetail || loadingVersions) && (
-        <p style={{ opacity: 0.75 }}>Carregando...</p>
-      )}
-
-      {errorDetail && <p style={{ color: "crimson" }}>{errorDetail}</p>}
-
-      {!errorDetail && !loadingDetail && !memory && (
-        <p style={{ opacity: 0.75 }}>Memória não encontrada.</p>
-      )}
-
-      {memory && (
-        <>
-          {/* Cabeçalho */}
-          <div
+    <div style={{ minHeight: "100vh", background: t.pageBg, color: t.text }}>
+      <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
+        {/* ✅ Breadcrumb (substitui o ← Voltar) */}
+        <div
+          style={{
+            marginBottom: 16,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 12,
+            color: t.text2,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => nav("/memories")}
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 16,
-              flexWrap: "wrap",
+              border: "none",
+              background: "transparent",
+              padding: 0,
+              color: t.text2,
+              cursor: "pointer",
+              fontWeight: 900,
             }}
+            aria-label="Voltar para Memórias"
+            title="Voltar para Memórias"
           >
-            <div style={{ minWidth: 260 }}>
-              <h1 style={{ marginBottom: 6, fontSize: 28, lineHeight: 1.15 }}>
-                {memory.title || "(sem título)"}
-              </h1>
-              <div style={subtle}>
-                Criada em{" "}
-                <strong>{fmtDateTimeCompactPtBR(memory.createdAt)}</strong>
-              </div>
-            </div>
+            Memórias
+          </button>
 
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                alignItems: "flex-start",
-                flexWrap: "wrap",
-              }}
-            >
-              <span style={badge}>v{currentVersion}</span>
-              {canEdit && <span style={badge}>Editável</span>}
-              {memory.authorId != null && (
-                <span style={badge}>Autor {String(memory.authorId)}</span>
-              )}
-              {memory.isDeleted && (
-                <span
-                  style={{
-                    ...badge,
-                    borderColor: "#f3bcbc",
-                    background: "#fff5f5",
-                  }}
-                >
-                  Apagada
-                </span>
-              )}
-            </div>
-          </div>
+          <span style={{ opacity: 0.6 }}>/</span>
 
-          {/* Ações */}
-          <div
+          <span
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 12,
-              flexWrap: "wrap",
-              marginTop: 14,
+              color: t.text,
+              fontWeight: 900,
+              maxWidth: 520,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
+            title={breadcrumbLabel}
           >
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button
-                onClick={loadDetail}
-                disabled={loadingDetail}
-                style={{ fontSize: 12 }}
-              >
-                {loadingDetail ? "Atualizando..." : "Recarregar detalhe"}
-              </button>
+            {breadcrumbLabel}
+          </span>
+        </div>
 
-              <button
-                onClick={loadVersions}
-                disabled={loadingVersions}
-                style={{ fontSize: 12 }}
-              >
-                {loadingVersions ? "Atualizando..." : "Recarregar versões"}
-              </button>
-            </div>
+        {(loadingDetail || loadingVersions) && <p style={{ color: t.text2 }}>Carregando...</p>}
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {canEdit && !editing && (
-                <button
-                  onClick={startEdit}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 12,
-                    border: "1px solid #0f172a",
-                    background: "#0f172a",
-                    color: "white",
-                    fontWeight: 800,
-                    cursor: "pointer",
-                  }}
-                >
-                  Editar
-                </button>
-              )}
+        {errorDetail && <p style={{ color: t.errText }}>{errorDetail}</p>}
 
-              {canEdit && editing && (
-                <>
-                  <button
-                    onClick={cancelEdit}
-                    disabled={savingEdit}
-                    style={{
-                      padding: "10px 14px",
-                      borderRadius: 12,
-                      border: "1px solid #d7dbe7",
-                      background: "white",
-                      fontWeight: 800,
-                      cursor: savingEdit ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    Cancelar
-                  </button>
+        {!errorDetail && !loadingDetail && !memory && <p style={{ color: t.text2 }}>Memória não encontrada.</p>}
 
-                  <button
-                    onClick={saveEdit}
-                    disabled={savingEdit}
-                    style={{
-                      padding: "10px 14px",
-                      borderRadius: 12,
-                      border: "1px solid #0f172a",
-                      background: "#0f172a",
-                      color: "white",
-                      fontWeight: 900,
-                      cursor: savingEdit ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    {savingEdit ? "Salvando..." : "Salvar alterações"}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Feedback edição */}
-          {(errorEdit || successEdit) && (
-            <div
-              style={{
-                marginTop: 12,
-                padding: 12,
-                borderRadius: 12,
-                border: `1px solid ${errorEdit ? "#f3bcbc" : "#cce6d0"}`,
-                background: errorEdit ? "#fff5f5" : "#f3fff5",
-                color: errorEdit ? "#a31212" : "#145a20",
-                fontWeight: 700,
-              }}
-            >
-              {errorEdit ?? successEdit}
-            </div>
-          )}
-
-          {/* Conteúdo */}
-          <div
-            style={{
-              border: "1px solid #e6e6e6",
-              padding: 16,
-              borderRadius: 12,
-              marginTop: 18,
-              background: "#fff",
-            }}
-          >
-            <div style={{ opacity: 0.65, fontSize: 12, marginBottom: 8 }}>
-              {editing
-                ? "Edição (salvar cria nova versão)"
-                : "Conteúdo (estado atual)"}
-            </div>
-
-            {!editing ? (
-              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>
-                {memory.content || "(vazio)"}
-              </div>
-            ) : (
-              <div style={{ display: "grid", gap: 12 }}>
-                <div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 800,
-                      opacity: 0.75,
-                      marginBottom: 6,
-                    }}
-                  >
-                    Título
-                  </div>
-                  <input
-                    value={draftTitle}
-                    onChange={(e) => setDraftTitle(e.target.value)}
-                    placeholder="(opcional)"
-                    style={input}
-                    disabled={savingEdit}
-                  />
-                </div>
-
-                <div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 800,
-                      opacity: 0.75,
-                      marginBottom: 6,
-                    }}
-                  >
-                    Conteúdo *
-                  </div>
-                  <textarea
-                    value={draftContent}
-                    onChange={(e) => setDraftContent(e.target.value)}
-                    placeholder="Escreva aqui..."
-                    style={textarea}
-                    disabled={savingEdit}
-                  />
-                </div>
-
-                <div style={{ ...subtle }}>
-                  Ao salvar, o HDUD registra uma <strong>nova versão</strong>{" "}
-                  (timeline) — não sobrescreve versões anteriores.
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Timeline */}
-          <div style={{ marginTop: 28 }}>
+        {memory && (
+          <>
+            {/* Cabeçalho */}
             <div
               style={{
                 display: "flex",
                 justifyContent: "space-between",
-                alignItems: "baseline",
-                gap: 12,
+                gap: 16,
+                flexWrap: "wrap",
               }}
             >
-              <h3 style={{ margin: 0 }}>Linha do Tempo (Versões)</h3>
-              <button
-                onClick={loadVersions}
-                disabled={loadingVersions}
-                style={{ fontSize: 12 }}
+              <div style={{ minWidth: 260 }}>
+                <h1 style={{ marginBottom: 6, fontSize: 28, lineHeight: 1.15 }}>
+                  {memory.title || "(sem título)"}
+                </h1>
+                <div style={subtle}>
+                  Criada em <strong>{fmtDateTimeCompactPtBR(memory.createdAt)}</strong>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "flex-start",
+                  flexWrap: "wrap",
+                }}
               >
-                {loadingVersions ? "Atualizando..." : "Recarregar versões"}
-              </button>
+                <span style={badge}>v{currentVersion}</span>
+                {canEdit && <span style={badge}>Editável</span>}
+                {memory.authorId != null && <span style={badge}>Autor {String(memory.authorId)}</span>}
+                {memory.isDeleted && (
+                  <span style={{ ...badge, borderColor: t.errBorder, background: t.errBg, color: t.errText }}>
+                    Apagada
+                  </span>
+                )}
+              </div>
             </div>
 
-            <p style={{ marginTop: 6, ...subtle }}>
-              Versão atual: <strong>v{currentVersion}</strong>
-              {" • "}
-              {versions.length > 0
-                ? `${versions.length} versão(ões) registradas`
-                : "nenhuma versão registrada ainda"}
-            </p>
+            {/* Ações */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+                marginTop: 14,
+              }}
+            >
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  onClick={loadDetail}
+                  disabled={loadingDetail}
+                  style={{
+                    fontSize: 12,
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    border: `1px solid ${t.border}`,
+                    background: t.surface,
+                    color: t.text,
+                    cursor: loadingDetail ? "not-allowed" : "pointer",
+                    fontWeight: 800,
+                  }}
+                >
+                  {loadingDetail ? "Atualizando..." : "Recarregar detalhe"}
+                </button>
 
-            {errorVersions && <p style={{ color: "crimson" }}>{errorVersions}</p>}
+                <button
+                  onClick={loadVersions}
+                  disabled={loadingVersions}
+                  style={{
+                    fontSize: 12,
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    border: `1px solid ${t.border}`,
+                    background: t.surface,
+                    color: t.text,
+                    cursor: loadingVersions ? "not-allowed" : "pointer",
+                    fontWeight: 800,
+                  }}
+                >
+                  {loadingVersions ? "Atualizando..." : "Recarregar versões"}
+                </button>
+              </div>
 
-            {!loadingVersions && versions.length === 0 ? (
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {canEdit && !editing && (
+                  <button
+                    onClick={startEdit}
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: 12,
+                      border: `1px solid ${t.btnPrimaryBg}`,
+                      background: t.btnPrimaryBg,
+                      color: t.btnPrimaryText,
+                      fontWeight: 800,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Editar
+                  </button>
+                )}
+
+                {canEdit && editing && (
+                  <>
+                    <button
+                      onClick={cancelEdit}
+                      disabled={savingEdit}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        border: `1px solid ${t.border}`,
+                        background: t.surface,
+                        color: t.text,
+                        fontWeight: 800,
+                        cursor: savingEdit ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      Cancelar
+                    </button>
+
+                    <button
+                      onClick={saveEdit}
+                      disabled={savingEdit}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        border: `1px solid ${t.btnPrimaryBg}`,
+                        background: t.btnPrimaryBg,
+                        color: t.btnPrimaryText,
+                        fontWeight: 900,
+                        cursor: savingEdit ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {savingEdit ? "Salvando..." : "Salvar alterações"}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Feedback edição */}
+            {(errorEdit || successEdit) && (
               <div
                 style={{
                   marginTop: 12,
-                  border: "1px dashed #d8d8d8",
+                  padding: 12,
                   borderRadius: 12,
-                  padding: 14,
-                  background: "#fafafa",
+                  border: `1px solid ${errorEdit ? t.errBorder : t.okBorder}`,
+                  background: errorEdit ? t.errBg : t.okBg,
+                  color: errorEdit ? t.errText : t.okText,
+                  fontWeight: 700,
                 }}
               >
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                  Nenhuma versão encontrada
-                </div>
-                <div style={subtle}>
-                  Edite e salve esta memória para gerar a primeira versão no
-                  histórico.
-                </div>
-              </div>
-            ) : (
-              <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-                {versions.map((v) => (
-                  <div
-                    key={`${v.memory_id}-${v.version_number}`}
-                    style={{
-                      border: "1px solid #eee",
-                      borderRadius: 12,
-                      padding: 12,
-                      background: "#fff",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 12,
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: 8,
-                          alignItems: "center",
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        <span style={badge}>v{v.version_number}</span>
-                        <span style={{ fontWeight: 600 }}>
-                          {v.title || "(sem título)"}
-                        </span>
-                        {v.version_number === currentVersion && (
-                          <span
-                            style={{
-                              ...badge,
-                              borderColor: "#cce6d0",
-                              background: "#f3fff5",
-                            }}
-                          >
-                            Atual
-                          </span>
-                        )}
-                      </div>
-
-                      {/* ✅ compactado */}
-                      <div style={subtle}>
-                        {fmtDateTimeCompactPtBR(v.created_at)}
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: 8, ...subtle }}>
-                      <div
-                        style={{
-                          opacity: 0.75,
-                          fontSize: 12,
-                          marginBottom: 6,
-                        }}
-                      >
-                        Snapshot
-                      </div>
-                      <div
-                        style={{
-                          whiteSpace: "pre-wrap",
-                          lineHeight: 1.45,
-                          color: "#222",
-                        }}
-                      >
-                        {v.content || "(vazio)"}
-                      </div>
-                    </div>
-
-                    {canEdit && v.version_number !== currentVersion && (
-                      <button
-                        onClick={() => restoreVersion(v)}
-                        disabled={savingEdit}
-                        style={{
-                          marginTop: 10,
-                          padding: "6px 10px",
-                          borderRadius: 10,
-                          border: "1px solid #0f172a",
-                          background: "white",
-                          fontWeight: 800,
-                          fontSize: 12,
-                          cursor: savingEdit ? "not-allowed" : "pointer",
-                        }}
-                      >
-                        🔁 Restaurar esta versão
-                      </button>
-                    )}
-                  </div>
-                ))}
+                {errorEdit ?? successEdit}
               </div>
             )}
 
-            {/* === Comparação de versões (Diff) === */}
+            {/* Conteúdo */}
             <div
               style={{
+                border: `1px solid ${t.borderSoft}`,
+                padding: 16,
+                borderRadius: 12,
                 marginTop: 18,
-                borderTop: "1px solid #eee",
-                paddingTop: 14,
+                background: t.surface,
+                boxShadow: t.shadow,
               }}
             >
+              <div style={{ opacity: 0.65, fontSize: 12, marginBottom: 8, color: t.text2 }}>
+                {editing ? "Edição (salvar cria nova versão)" : "Conteúdo (estado atual)"}
+              </div>
+
+              {!editing ? (
+                <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.55, color: t.text }}>
+                  {memory.content || "(vazio)"}
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.75, marginBottom: 6, color: t.text2 }}>
+                      Título
+                    </div>
+                    <input
+                      value={draftTitle}
+                      onChange={(e) => setDraftTitle(e.target.value)}
+                      placeholder="(opcional)"
+                      style={input}
+                      disabled={savingEdit}
+                    />
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.75, marginBottom: 6, color: t.text2 }}>
+                      Conteúdo *
+                    </div>
+                    <textarea
+                      value={draftContent}
+                      onChange={(e) => setDraftContent(e.target.value)}
+                      placeholder="Escreva aqui..."
+                      style={textarea}
+                      disabled={savingEdit}
+                    />
+                  </div>
+
+                  <div style={{ ...subtle }}>
+                    Ao salvar, o HDUD registra uma <strong>nova versão</strong> (timeline) — não sobrescreve versões
+                    anteriores.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Timeline */}
+            <div style={{ marginTop: 28 }}>
               <div
                 style={{
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "baseline",
                   gap: 12,
-                  flexWrap: "wrap",
                 }}
               >
-                <div>
-                  <div style={{ fontSize: 16, fontWeight: 900 }}>
-                    Comparar versões
-                  </div>
-                  <div style={{ fontSize: 12, opacity: 0.7 }}>
-                    Selecione duas versões e veja o que foi adicionado/removido
-                    (diff por linhas).
-                  </div>
-                </div>
-
-                <div
+                <h3 style={{ margin: 0 }}>Linha do Tempo (Versões)</h3>
+                <button
+                  onClick={loadVersions}
+                  disabled={loadingVersions}
                   style={{
-                    display: "flex",
-                    gap: 8,
-                    alignItems: "center",
-                    flexWrap: "wrap",
+                    fontSize: 12,
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    border: `1px solid ${t.border}`,
+                    background: t.surface,
+                    color: t.text,
+                    cursor: loadingVersions ? "not-allowed" : "pointer",
+                    fontWeight: 800,
                   }}
                 >
-                  <select
-                    value={diffVA ?? ""}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setDiffVA(Number.isFinite(v) ? v : null);
-                      setShowDiff(false);
-                    }}
-                    style={{
-                      padding: "8px 10px",
-                      borderRadius: 10,
-                      border: "1px solid #d7dbe7",
-                    }}
-                  >
-                    <option value="">Versão A</option>
-                    {versions
-                      .map((x) => x.version_number)
-                      .filter((x, idx, arr) => arr.indexOf(x) === idx)
-                      .sort((a, b) => a - b)
-                      .map((vn) => (
-                        <option key={`a-${vn}`} value={vn}>
-                          v{vn}
-                        </option>
-                      ))}
-                  </select>
-
-                  <select
-                    value={diffVB ?? ""}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setDiffVB(Number.isFinite(v) ? v : null);
-                      setShowDiff(false);
-                    }}
-                    style={{
-                      padding: "8px 10px",
-                      borderRadius: 10,
-                      border: "1px solid #d7dbe7",
-                    }}
-                  >
-                    <option value="">Versão B</option>
-                    {versions
-                      .map((x) => x.version_number)
-                      .filter((x, idx, arr) => arr.indexOf(x) === idx)
-                      .sort((a, b) => a - b)
-                      .map((vn) => (
-                        <option key={`b-${vn}`} value={vn}>
-                          v{vn}
-                        </option>
-                      ))}
-                  </select>
-
-                  <button
-                    onClick={() => setShowDiff(true)}
-                    disabled={!canCompare}
-                    style={{
-                      padding: "9px 12px",
-                      borderRadius: 10,
-                      border: "1px solid #0f172a",
-                      background: canCompare ? "#0f172a" : "#9aa3b2",
-                      color: "white",
-                      fontWeight: 900,
-                      cursor: canCompare ? "pointer" : "not-allowed",
-                    }}
-                  >
-                    Comparar
-                  </button>
-
-                  {showDiff && (
-                    <button
-                      onClick={() => setShowDiff(false)}
-                      style={{
-                        padding: "9px 12px",
-                        borderRadius: 10,
-                        border: "1px solid #d7dbe7",
-                        background: "white",
-                        fontWeight: 900,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Fechar
-                    </button>
-                  )}
-                </div>
+                  {loadingVersions ? "Atualizando..." : "Recarregar versões"}
+                </button>
               </div>
 
-              {showDiff && (
+              <p style={{ marginTop: 6, ...subtle }}>
+                Versão atual: <strong>v{currentVersion}</strong>
+                {" • "}
+                {versions.length > 0 ? `${versions.length} versão(ões) registradas` : "nenhuma versão registrada ainda"}
+              </p>
+
+              {errorVersions && <p style={{ color: t.errText }}>{errorVersions}</p>}
+
+              {!loadingVersions && versions.length === 0 ? (
                 <div
                   style={{
                     marginTop: 12,
-                    border: "1px solid #eee",
+                    border: `1px dashed ${t.border}`,
                     borderRadius: 12,
-                    padding: 12,
-                    background: "#fff",
+                    padding: 14,
+                    background: t.surface2,
                   }}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 10,
-                      flexWrap: "wrap",
-                      alignItems: "center",
-                      marginBottom: 10,
-                    }}
-                  >
-                    <span style={badge}>A: v{diffVA}</span>
-                    <span style={badge}>B: v{diffVB}</span>
-                    <span style={{ ...subtle }}>
-                      🟢 adições • 🔴 remoções • linhas iguais são omitidas para
-                      ficar legível
-                    </span>
-                  </div>
-
-                  {diffRows.length === 0 ? (
-                    <div style={subtle}>
-                      Nenhuma diferença detectada (ou conteúdo vazio nas versões
-                      selecionadas).
-                    </div>
-                  ) : (
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Nenhuma versão encontrada</div>
+                  <div style={subtle}>Edite e salve esta memória para gerar a primeira versão no histórico.</div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                  {versions.map((v) => (
                     <div
+                      key={`${v.memory_id}-${v.version_number}`}
                       style={{
-                        fontFamily:
-                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        border: `1px solid ${t.borderSoft}`,
+                        borderRadius: 12,
+                        padding: 12,
+                        background: t.surface,
+                        boxShadow: t.shadow,
                       }}
                     >
-                      {diffRows.map((row, idx) => {
-                        const isAdd = row.t === "add";
-                        const isDel = row.t === "del";
-                        const color = isAdd
-                          ? "#145a20"
-                          : isDel
-                          ? "#a31212"
-                          : "#222";
-                        const bg = isAdd
-                          ? "#f3fff5"
-                          : isDel
-                          ? "#fff5f5"
-                          : "transparent";
-                        const prefix = isAdd ? "+ " : isDel ? "- " : "  ";
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 12,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 8,
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <span style={badge}>v{v.version_number}</span>
+                          <span style={{ fontWeight: 600, color: t.text }}>{v.title || "(sem título)"}</span>
+                          {v.version_number === currentVersion && (
+                            <span style={{ ...badge, borderColor: t.okBorder, background: t.okBg, color: t.okText }}>
+                              Atual
+                            </span>
+                          )}
+                        </div>
 
-                        return (
-                          <div
-                            key={idx}
-                            style={{
-                              color,
-                              background: bg,
-                              padding: "2px 6px",
-                              borderRadius: 8,
-                              marginBottom: 4,
-                              whiteSpace: "pre-wrap",
-                              lineHeight: 1.45,
-                            }}
-                          >
-                            {prefix}
-                            {row.v}
-                          </div>
-                        );
-                      })}
+                        <div style={subtle}>{fmtDateTimeCompactPtBR(v.created_at)}</div>
+                      </div>
+
+                      <div style={{ marginTop: 8, ...subtle }}>
+                        <div style={{ opacity: 0.75, fontSize: 12, marginBottom: 6 }}>Snapshot</div>
+                        <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.45, color: t.text }}>
+                          {v.content || "(vazio)"}
+                        </div>
+                      </div>
+
+                      {canEdit && v.version_number !== currentVersion && (
+                        <button
+                          onClick={() => restoreVersion(v)}
+                          disabled={savingEdit}
+                          style={{
+                            marginTop: 10,
+                            padding: "6px 10px",
+                            borderRadius: 10,
+                            border: `1px solid ${t.btnPrimaryBg}`,
+                            background: t.surface,
+                            color: t.text,
+                            fontWeight: 800,
+                            fontSize: 12,
+                            cursor: savingEdit ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          🔁 Restaurar esta versão
+                        </button>
+                      )}
                     </div>
-                  )}
+                  ))}
                 </div>
               )}
+
+              {/* === Comparação de versões (Diff) === */}
+              <div style={{ marginTop: 18, borderTop: `1px solid ${t.borderSoft}`, paddingTop: 14 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "baseline",
+                    gap: 12,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 900 }}>Comparar versões</div>
+                    <div style={{ fontSize: 12, opacity: 0.7, color: t.text2 }}>
+                      Selecione duas versões e veja o que foi adicionado/removido (diff por linhas).
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <select
+                      value={diffVA ?? ""}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        setDiffVA(Number.isFinite(v) ? v : null);
+                        setShowDiff(false);
+                      }}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 10,
+                        border: `1px solid ${t.border}`,
+                        background: t.surface,
+                        color: t.text,
+                      }}
+                    >
+                      <option value="">Versão A</option>
+                      {versions
+                        .map((x) => x.version_number)
+                        .filter((x, idx, arr) => arr.indexOf(x) === idx)
+                        .sort((a, b) => a - b)
+                        .map((vn) => (
+                          <option key={`a-${vn}`} value={vn}>
+                            v{vn}
+                          </option>
+                        ))}
+                    </select>
+
+                    <select
+                      value={diffVB ?? ""}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        setDiffVB(Number.isFinite(v) ? v : null);
+                        setShowDiff(false);
+                      }}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 10,
+                        border: `1px solid ${t.border}`,
+                        background: t.surface,
+                        color: t.text,
+                      }}
+                    >
+                      <option value="">Versão B</option>
+                      {versions
+                        .map((x) => x.version_number)
+                        .filter((x, idx, arr) => arr.indexOf(x) === idx)
+                        .sort((a, b) => a - b)
+                        .map((vn) => (
+                          <option key={`b-${vn}`} value={vn}>
+                            v{vn}
+                          </option>
+                        ))}
+                    </select>
+
+                    <button
+                      onClick={() => setShowDiff(true)}
+                      disabled={!canCompare}
+                      style={{
+                        padding: "9px 12px",
+                        borderRadius: 10,
+                        border: `1px solid ${t.btnPrimaryBg}`,
+                        background: canCompare ? t.btnPrimaryBg : "var(--hdud-btn-disabled, #9aa3b2)",
+                        color: "white",
+                        fontWeight: 900,
+                        cursor: canCompare ? "pointer" : "not-allowed",
+                      }}
+                    >
+                      Comparar
+                    </button>
+
+                    {showDiff && (
+                      <button
+                        onClick={() => setShowDiff(false)}
+                        style={{
+                          padding: "9px 12px",
+                          borderRadius: 10,
+                          border: `1px solid ${t.border}`,
+                          background: t.surface,
+                          color: t.text,
+                          fontWeight: 900,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Fechar
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {showDiff && (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      border: `1px solid ${t.borderSoft}`,
+                      borderRadius: 12,
+                      padding: 12,
+                      background: t.surface,
+                      boxShadow: t.shadow,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        marginBottom: 10,
+                      }}
+                    >
+                      <span style={badge}>A: v{diffVA}</span>
+                      <span style={badge}>B: v{diffVB}</span>
+                      <span style={{ ...subtle }}>
+                        🟢 adições • 🔴 remoções • linhas iguais são omitidas para ficar legível
+                      </span>
+                    </div>
+
+                    {diffRows.length === 0 ? (
+                      <div style={subtle}>Nenhuma diferença detectada (ou conteúdo vazio nas versões selecionadas).</div>
+                    ) : (
+                      <div
+                        style={{
+                          fontFamily:
+                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        }}
+                      >
+                        {diffRows.map((row, idx) => {
+                          const isAdd = row.t === "add";
+                          const isDel = row.t === "del";
+
+                          const color = isAdd ? t.okText : isDel ? t.errText : t.text;
+                          const bg = isAdd ? t.okBg : isDel ? t.errBg : "transparent";
+                          const prefix = isAdd ? "+ " : isDel ? "- " : "  ";
+
+                          return (
+                            <div
+                              key={idx}
+                              style={{
+                                color,
+                                background: bg,
+                                padding: "2px 6px",
+                                borderRadius: 8,
+                                marginBottom: 4,
+                                whiteSpace: "pre-wrap",
+                                lineHeight: 1.45,
+                              }}
+                            >
+                              {prefix}
+                              {row.v}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {/* === /Diff === */}
             </div>
-            {/* === /Diff === */}
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
