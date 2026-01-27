@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+node_modules/
+dist/
+.vite/
+.pnpm-store/
+coverage/
+.cache/
+.env
+.env.*
+Thumbs.db

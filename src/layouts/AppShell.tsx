@@ -10,7 +10,14 @@ export default function AppShell({ onLogout }: Props) {
   const location = useLocation();
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh" }}>
+    <div
+      style={{
+        display: "flex",
+        minHeight: "100vh",
+        background: "var(--hdud-bg)",
+        color: "var(--hdud-text)",
+      }}
+    >
       {/* Sidebar */}
       <aside
         style={{
@@ -92,7 +99,7 @@ export default function AppShell({ onLogout }: Props) {
         </header>
 
         {/* Content */}
-        <main style={{ flex: 1 }}>
+        <main style={{ flex: 1, background: "var(--hdud-bg)" }}>
           <Outlet />
         </main>
       </div>
