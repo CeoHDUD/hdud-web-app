@@ -1,18 +1,26 @@
-﻿# ---------- build ----------
+﻿# -- C:\HDUD_DATA\hdud-web-app\Dockerfile.prod --
+# ---------- build ----------
 FROM node:20-alpine AS build
 WORKDIR /work
 
-# Copia o SDK primeiro (pra existir na hora de instalar deps do web)
+# Habilita pnpm via corepack (garante pnpm disponível no build)
+RUN corepack enable
+
+# Copia o SDK primeiro (pra existir na hora de buildar e instalar no web)
 COPY hdud-api-node/sdk/hdud-sdk ./hdud-api-node/sdk/hdud-sdk
 
+# Builda o SDK DENTRO do Docker (gera dist/ e dist/esm/)
+WORKDIR /work/hdud-api-node/sdk/hdud-sdk
+RUN pnpm install && pnpm run build
+
 # Copia manifests do web
+WORKDIR /work
 COPY hdud-web-app/package.json hdud-web-app/pnpm-lock.yaml* ./hdud-web-app/
 
 WORKDIR /work/hdud-web-app
 
-# Instala deps e FORÇA registrar o SDK local no node_modules
-RUN corepack enable \
-  && pnpm install --frozen-lockfile || pnpm install \
+# Instala deps do web e registra o SDK local
+RUN pnpm install --frozen-lockfile || pnpm install \
   && pnpm add @hdud/sdk@file:../hdud-api-node/sdk/hdud-sdk
 
 # Copia o restante do web e builda
