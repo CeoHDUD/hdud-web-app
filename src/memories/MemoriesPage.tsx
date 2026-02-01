@@ -4,12 +4,10 @@ import { useNavigate } from "react-router-dom";
 
 type MemoryListItem = {
   memory_id: number;
-  author_id: number;
+  author_id?: number;
   title: string | null;
   content: string;
   created_at: string;
-  version_number: number;
-  is_deleted: boolean;
   meta?: {
     can_edit?: boolean;
     current_version?: number;
@@ -18,7 +16,12 @@ type MemoryListItem = {
 
 type MemoriesResponse = {
   author_id: number;
-  memories: MemoryListItem[];
+  memories: any[];
+};
+
+type TimelineResponse = {
+  ok?: boolean;
+  items?: any[];
 };
 
 const API_BASE = "/api";
@@ -97,10 +100,82 @@ function formatDateBR(iso: string): string {
   }
 }
 
+// Mantido (pode ser útil em outras telas; aqui preferimos clamp por linhas)
 function clip(text: string, max: number) {
   const t = (text || "").trim();
   if (t.length <= max) return t;
   return `${t.slice(0, max)}…`;
+}
+
+function coerceNumber(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeFromLegacy(raw: any): MemoryListItem | null {
+  const id = coerceNumber(raw?.memory_id) ?? coerceNumber(raw?.id);
+  if (!id) return null;
+
+  return {
+    memory_id: id,
+    author_id: coerceNumber(raw?.author_id) ?? undefined,
+    title: raw?.title === null || raw?.title === undefined ? null : String(raw?.title),
+    content: String(raw?.content ?? ""),
+    created_at: String(raw?.created_at ?? new Date().toISOString()),
+    meta: raw?.meta
+      ? {
+          can_edit: typeof raw.meta.can_edit === "boolean" ? raw.meta.can_edit : undefined,
+          current_version:
+            coerceNumber(raw.meta.current_version) ??
+            coerceNumber(raw?.version_number) ??
+            undefined,
+        }
+      : {
+          current_version: coerceNumber(raw?.version_number) ?? undefined,
+        },
+  };
+}
+
+/**
+ * Timeline item (seu curl confirmou):
+ * item.raw.memory_id, item.raw.content, item.raw.created_at, item.raw.meta...
+ * Além disso, item.source === "memories" quando for memória.
+ */
+function normalizeFromTimelineItem(item: any): MemoryListItem | null {
+  const raw = item?.raw ?? null;
+  if (!raw) return null;
+
+  const id = coerceNumber(raw?.memory_id) ?? null;
+  if (!id) return null;
+
+  const created =
+    raw?.created_at ||
+    item?.at ||
+    item?.timestamp ||
+    new Date().toISOString();
+
+  const metaRaw = raw?.meta ?? null;
+
+  return {
+    memory_id: id,
+    author_id: coerceNumber(raw?.author_id) ?? undefined,
+    title: raw?.title === null || raw?.title === undefined ? null : String(raw?.title),
+    content: String(raw?.content ?? ""),
+    created_at: String(created),
+    meta: {
+      can_edit: typeof metaRaw?.can_edit === "boolean" ? metaRaw.can_edit : undefined,
+      current_version: coerceNumber(metaRaw?.current_version) ?? undefined,
+    },
+  };
+}
+
+function sortNewestFirst(list: MemoryListItem[]) {
+  list.sort((a, b) => {
+    const da = new Date(a.created_at).getTime();
+    const db = new Date(b.created_at).getTime();
+    if (!Number.isFinite(da) || !Number.isFinite(db)) return 0;
+    return db - da;
+  });
 }
 
 export default function MemoriesPage(props: {
@@ -147,18 +222,43 @@ export default function MemoriesPage(props: {
       return;
     }
 
-    if (!authorId || !Number.isFinite(authorId)) {
-      setError("author_id ausente. Faça login novamente.");
-      hardLogout();
-      return;
-    }
-
     setLoading(true);
+
     try {
-      const data = await api<MemoriesResponse>("GET", `/authors/${authorId}/memories`, token);
-      const list = Array.isArray(data?.memories) ? data.memories : [];
-      // Ordena por created_at desc (mais recente primeiro)
-      list.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+      // 1) Preferencial: /timeline
+      let list: MemoryListItem[] = [];
+
+      try {
+        const data = await api<TimelineResponse>("GET", `/timeline`, token);
+        const all = Array.isArray(data?.items) ? data!.items! : [];
+
+        // Só memórias (não misturar chapters na tela de Memórias)
+        const memoriesOnly = all.filter((it: any) => it?.source === "memories");
+
+        list = memoriesOnly
+          .map((it: any) => normalizeFromTimelineItem(it))
+          .filter(Boolean) as MemoryListItem[];
+      } catch (eTimeline: any) {
+        // só ignora e tenta legado
+        list = [];
+      }
+
+      // 2) Fallback inteligente: se timeline veio vazio, tenta legado
+      if (list.length === 0) {
+        if (!authorId || !Number.isFinite(authorId)) {
+          setError("author_id ausente. Faça login novamente.");
+          hardLogout();
+          return;
+        }
+
+        const legacy = await api<MemoriesResponse>("GET", `/authors/${authorId}/memories`, token);
+        const rawList = Array.isArray(legacy?.memories) ? legacy.memories : [];
+        list = rawList
+          .map((m: any) => normalizeFromLegacy(m))
+          .filter(Boolean) as MemoryListItem[];
+      }
+
+      sortNewestFirst(list);
       setItems(list);
     } catch (e: any) {
       if (e?.status === 401) {
@@ -173,9 +273,9 @@ export default function MemoriesPage(props: {
   }, [authorId, hardLogout, token]);
 
   useEffect(() => {
-    // Carrega na entrada, mas só quando tivermos authorId/token
-    if (authorId && token) load();
-  }, [authorId, token, load]);
+    // Carrega na entrada quando tiver token (timeline não depende de authorId)
+    if (token) load();
+  }, [token, load]);
 
   async function create() {
     setError(null);
@@ -199,7 +299,7 @@ export default function MemoriesPage(props: {
 
     setCreating(true);
     try {
-      // Contrato confirmado por curl: POST /authors/:id/memories e author_id no body
+      // Mantido (legado confirmado): POST /authors/:id/memories
       await api("POST", `/authors/${authorId}/memories`, token, {
         author_id: authorId,
         title: title.trim() ? title.trim() : null,
@@ -380,6 +480,22 @@ export default function MemoriesPage(props: {
       cursor: "pointer",
     };
 
+    // ✅ Preview compacto por linhas (2–3), sem “textão” na listagem
+    const previewClamp: React.CSSProperties = {
+      marginTop: 8,
+      opacity: 0.88,
+      fontSize: 13,
+      lineHeight: 1.4,
+      overflow: "hidden",
+      display: "-webkit-box",
+      WebkitBoxOrient: "vertical" as any,
+      WebkitLineClamp: 3 as any,
+      // fallback suave se o clamp não aplicar
+      maxHeight: 13 * 1.4 * 3 + 2,
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-word",
+    };
+
     const footerHint: React.CSSProperties = {
       marginTop: 16,
       opacity: 0.65,
@@ -422,6 +538,7 @@ export default function MemoriesPage(props: {
       dangerBox,
       listWrap,
       listItem,
+      previewClamp,
       footerHint,
       splitRow,
       rightActions,
@@ -436,7 +553,7 @@ export default function MemoriesPage(props: {
         <div style={{ marginBottom: 10 }}>
           <h1 style={ui.h1}>Minhas Memórias</h1>
           <div style={ui.subtitle}>
-            Demo v0.1 — fetch via <code>/api</code> (lista via <code>/authors/:id/memories</code>).
+            Demo v0.1 — listagem preferencial via <code>/api/timeline</code> (fonte: <code>source=memories</code>).
           </div>
         </div>
 
@@ -528,7 +645,12 @@ export default function MemoriesPage(props: {
             <div style={ui.cardHeaderRow}>
               <div>
                 <div style={ui.cardTitle}>Histórico</div>
-                <div style={ui.cardDesc}>Clique em um card para abrir detalhes e versões.</div>
+                <div style={ui.cardDesc}>
+                  Clique em um card para abrir detalhes e versões.
+                  <div style={{ marginTop: 6, opacity: 0.75 }}>
+                    UI usa <code>meta.can_edit</code> e <code>meta.current_version</code>.
+                  </div>
+                </div>
               </div>
 
               <button
@@ -552,9 +674,10 @@ export default function MemoriesPage(props: {
               )}
 
               {items.map((m) => {
-                const v = m.meta?.current_version ?? m.version_number ?? 1;
+                const v = m.meta?.current_version ?? 1;
+                const canEdit = m.meta?.can_edit;
                 const header = m.title?.trim() ? m.title : `Memória #${m.memory_id}`;
-                const preview = clip(m.content || "", 170);
+                const full = (m.content || "").trim();
 
                 return (
                   <div
@@ -573,6 +696,11 @@ export default function MemoriesPage(props: {
                         {header}
                         <span style={{ marginLeft: 10, opacity: 0.7, fontWeight: 700, fontSize: 12 }}>
                           #{m.memory_id} • v{v}
+                          {typeof canEdit === "boolean" && (
+                            <span style={{ marginLeft: 8, opacity: 0.85 }}>
+                              • {canEdit ? "editável" : "somente leitura"}
+                            </span>
+                          )}
                         </span>
                       </div>
                       <div style={{ opacity: 0.75, fontSize: 12, whiteSpace: "nowrap" }}>
@@ -580,8 +708,8 @@ export default function MemoriesPage(props: {
                       </div>
                     </div>
 
-                    <div style={{ marginTop: 8, opacity: 0.88, fontSize: 13, lineHeight: 1.4 }}>
-                      {preview || <span style={{ opacity: 0.65 }}>(sem conteúdo)</span>}
+                    <div style={ui.previewClamp} title={full || ""}>
+                      {full || <span style={{ opacity: 0.65 }}>(sem conteúdo)</span>}
                     </div>
                   </div>
                 );

@@ -1,13 +1,45 @@
 // C:\HDUD_DATA\hdud-web-app\src\layouts\AppShell.tsx
 
 import { Outlet, NavLink, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
 
 type Props = {
   onLogout: () => void;
 };
 
+// Flag DEV-only (não existe em prod se não definida)
+const DEBUG_AUTH =
+  (import.meta as any).env?.VITE_DEBUG_AUTH === "1";
+
+type AuthDebugStatus = "ok" | "refreshed" | "fail";
+
 export default function AppShell({ onLogout }: Props) {
   const location = useLocation();
+
+  // Estado DEV-only para observabilidade visual
+  const [authStatus, setAuthStatus] = useState<AuthDebugStatus>("ok");
+
+  useEffect(() => {
+    if (!DEBUG_AUTH) return;
+
+    // Escuta eventos simples disparados pelo App (custom events)
+    function onAuthRefreshed() {
+      setAuthStatus("refreshed");
+      setTimeout(() => setAuthStatus("ok"), 2000);
+    }
+
+    function onAuthFail() {
+      setAuthStatus("fail");
+    }
+
+    window.addEventListener("hdud:auth-refreshed", onAuthRefreshed);
+    window.addEventListener("hdud:auth-fail", onAuthFail);
+
+    return () => {
+      window.removeEventListener("hdud:auth-refreshed", onAuthRefreshed);
+      window.removeEventListener("hdud:auth-fail", onAuthFail);
+    };
+  }, []);
 
   return (
     <div
@@ -73,11 +105,35 @@ export default function AppShell({ onLogout }: Props) {
             background: "var(--hdud-surface)",
           }}
         >
-          <div style={{ fontWeight: 800 }}>
-            {location.pathname.startsWith("/memories") ? "Memórias" : "HDUD"}{" "}
-            <span style={{ fontWeight: 500, opacity: 0.7 }}>
-              AppShell mínimo (vNext)
+          <div style={{ fontWeight: 800, display: "flex", gap: 12 }}>
+            <span>
+              {location.pathname.startsWith("/memories") ? "Memórias" : "HDUD"}{" "}
+              <span style={{ fontWeight: 500, opacity: 0.7 }}>
+                AppShell mínimo (vNext)
+              </span>
             </span>
+
+            {/* Badge DEV-only */}
+            {DEBUG_AUTH && (
+              <span
+                style={{
+                  padding: "4px 8px",
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  alignSelf: "center",
+                  background:
+                    authStatus === "ok"
+                      ? "#1f7a1f"
+                      : authStatus === "refreshed"
+                      ? "#1f4fd8"
+                      : "#b91c1c",
+                  color: "#fff",
+                }}
+              >
+                Auth: {authStatus}
+              </span>
+            )}
           </div>
 
           <div>
