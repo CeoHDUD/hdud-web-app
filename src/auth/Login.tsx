@@ -1,7 +1,7 @@
 ﻿// C:\HDUD_DATA\hdud-web-app\src\auth\Login.tsx
-﻿// C:\HDUD_DATA\hdud-web-app\src\auth\Login.tsx
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { setAuthTokens } from "../lib/api";
 
 type LoginResponse = {
   access_token?: string;
@@ -35,7 +35,6 @@ export default function Login({ onLoggedIn }: Props) {
     border: "rgba(15, 23, 42, 0.14)",
     shadow: "0 12px 40px rgba(2, 6, 23, 0.10)",
     primary: "#0B4F8A",
-    primaryHover: "#0A4578",
     inputBg: "rgba(255, 255, 255, 0.9)",
     errorBg: "#FFF4F4",
     errorBorder: "rgba(220, 38, 38, 0.35)",
@@ -79,26 +78,20 @@ export default function Login({ onLoggedIn }: Props) {
 
       const data = (await res.json()) as LoginResponse;
 
-      const accessToken = data.access_token ?? data.accessToken ?? "";
-      const refreshToken = data.refresh_token ?? data.refreshToken ?? "";
+      const accessToken = (data.access_token ?? data.accessToken ?? "").trim();
+      const refreshToken = (data.refresh_token ?? data.refreshToken ?? "").trim();
+
       const user = data.user ?? {};
-      const authorId = user.authorId ?? user.author_id ?? "";
+      const authorId = user.authorId ?? user.author_id ?? null;
 
       if (!accessToken) throw new Error("Login retornou sem access token.");
 
-      // ✅ Compat: cobre todas as chaves que já apareceram no projeto
-      localStorage.setItem("hdud_access_token", String(accessToken));
-      localStorage.setItem("access_token", String(accessToken));
-      localStorage.setItem("token", String(accessToken));
-      localStorage.setItem("refresh_token", String(refreshToken));
-      localStorage.setItem("author_id", String(authorId ?? ""));
-      localStorage.setItem("HDUD_TOKEN", String(accessToken));
-      localStorage.setItem("HDUD_AUTHOR_ID", String(authorId ?? ""));
+      // ✅ 1 fonte de verdade p/ tokens e ids
+      setAuthTokens(accessToken, refreshToken || undefined, authorId);
 
       // ✅ CRÍTICO: destrava o App (state) sem depender só de navigate()
-      onLoggedIn(String(accessToken));
+      onLoggedIn(accessToken);
 
-      // ✅ Opcional: empurra para o landing oficial já logado
       navigate("/dashboard", { replace: true });
     } catch (err: any) {
       setErrorMsg(err?.message || "Erro inesperado no login.");
@@ -126,11 +119,10 @@ export default function Login({ onLoggedIn }: Props) {
           border: `1px solid ${ui.border}`,
           borderRadius: 18,
           boxShadow: ui.shadow,
-          padding: 32, // ✅ padding uniforme (corrige percepção direita/esquerda)
+          padding: 32,
           boxSizing: "border-box",
         }}
       >
-        {/* Logo */}
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
           <img
             src="/logo_hdud.png"
@@ -145,7 +137,6 @@ export default function Login({ onLoggedIn }: Props) {
           />
         </div>
 
-        {/* Tagline */}
         <div
           style={{
             textAlign: "center",
@@ -159,7 +150,6 @@ export default function Login({ onLoggedIn }: Props) {
           Histórias de um Desconhecido até então
         </div>
 
-        {/* Divider */}
         <div
           style={{
             height: 1,
@@ -169,7 +159,6 @@ export default function Login({ onLoggedIn }: Props) {
           }}
         />
 
-        {/* Headline */}
         <div style={{ textAlign: "center", marginBottom: 18 }}>
           <h1 style={{ margin: 0, fontSize: 28, letterSpacing: -0.4 }}>Entrar</h1>
           <p style={{ margin: "6px 0 0", color: ui.muted, fontSize: 13 }}>
@@ -258,7 +247,7 @@ export default function Login({ onLoggedIn }: Props) {
               lineHeight: 1.35,
             }}
           >
-            Dica: se o token expirar, o HDUD vai fazer logout automático e pedir login de novo.
+            Dica: se o token expirar, o HDUD vai te redirecionar para o login automaticamente.
           </p>
         </form>
       </div>

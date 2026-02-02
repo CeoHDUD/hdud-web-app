@@ -1,5 +1,8 @@
+// C:\HDUD_DATA\hdud-web-app\src\memories\MemoryDetailPage.tsx
+
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { apiGet, apiPut } from "../lib/api";
 
 type Props = { token?: string | null; onLogout?: () => void };
 
@@ -26,18 +29,6 @@ type MemoryVersion = {
 
 type DiffRow = { t: "eq" | "add" | "del"; v: string };
 
-const API_BASE = "/api";
-const REQ_TIMEOUT_MS = 12000;
-
-// Mantém compat com as chaves que já apareceram nos seus testes/prints
-function getTokenFromStorage(): string | null {
-  return (
-    localStorage.getItem("HDUD_TOKEN") ||
-    localStorage.getItem("access_token") ||
-    localStorage.getItem("token")
-  );
-}
-
 function isAbortError(e: any) {
   return e?.name === "AbortError" || String(e?.message || "").toLowerCase().includes("aborted");
 }
@@ -46,8 +37,9 @@ export default function MemoryDetailPage(props: Props) {
   const { id } = useParams();
   const nav = useNavigate();
 
-  // Fonte de verdade: token em storage (porque o App pode passar prop velha)
-  const token = useMemo(() => props.token || getTokenFromStorage(), [props.token]);
+  // Importante: token prop pode estar “velho”; a fonte de verdade real é o storage + api.ts.
+  // Mantemos memo apenas para “UX” (exibir msg), mas chamadas não dependem dele.
+  const tokenHint = useMemo(() => props.token ?? null, [props.token]);
 
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
@@ -65,7 +57,7 @@ export default function MemoryDetailPage(props: Props) {
   const [errorEdit, setErrorEdit] = useState<string | null>(null);
   const [successEdit, setSuccessEdit] = useState<string | null>(null);
 
-  // === DIFF (Comparar versões) ===
+  // === DIFF ===
   const [diffVA, setDiffVA] = useState<number | null>(null);
   const [diffVB, setDiffVB] = useState<number | null>(null);
   const [showDiff, setShowDiff] = useState(false);
@@ -75,24 +67,16 @@ export default function MemoryDetailPage(props: Props) {
     return Number.isFinite(n) ? n : null;
   }, [id]);
 
-  // --- Abort controllers por request (evita loop/pendurar) ---
+  // Abort controllers
   const detailAbortRef = useRef<AbortController | null>(null);
   const versionsAbortRef = useRef<AbortController | null>(null);
   const putAbortRef = useRef<AbortController | null>(null);
 
-  // evita overlaps reais (independente de re-render)
+  // evita overlaps
   const inflightDetail = useRef(false);
   const inflightVersions = useRef(false);
 
-  const hardLogout = useCallback(() => {
-    localStorage.removeItem("HDUD_TOKEN");
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("token");
-    props.onLogout?.();
-    nav("/login");
-  }, [nav, props.onLogout]);
-
-  // ✅ Tokens de tema com fallback
+  // ✅ UI tokens (tema)
   const t = useMemo(() => {
     return {
       pageBg: "var(--hdud-bg, #f6f7fb)",
@@ -100,7 +84,6 @@ export default function MemoryDetailPage(props: Props) {
       surface2: "var(--hdud-surface-2, #fafafa)",
       text: "var(--hdud-text, #0f172a)",
       text2: "var(--hdud-text-2, #666666)",
-      text3: "var(--hdud-text-3, #222222)",
       border: "var(--hdud-border, #d7dbe7)",
       borderSoft: "var(--hdud-border-soft, #eeeeee)",
       shadow: "var(--hdud-shadow, 0 14px 30px rgba(20,20,40,.08))",
@@ -148,7 +131,6 @@ export default function MemoryDetailPage(props: Props) {
     lineHeight: 1.45,
   };
 
-  // ✅ Compacto: DD/MM/AAAA HH:MM
   function fmtDateTimeCompactPtBR(iso?: string) {
     if (!iso) return "—";
     const d = new Date(iso);
@@ -160,28 +142,6 @@ export default function MemoryDetailPage(props: Props) {
     const hh = String(d.getHours()).padStart(2, "0");
     const mi = String(d.getMinutes()).padStart(2, "0");
     return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
-  }
-
-  async function readJsonOrText(res: Response): Promise<any> {
-    const ct = res.headers.get("content-type") || "";
-    if (ct.includes("application/json")) {
-      try {
-        return await res.json();
-      } catch {
-        return null;
-      }
-    }
-    try {
-      return await res.text();
-    } catch {
-      return null;
-    }
-  }
-
-  function messageFromErrorPayload(payload: any): string | null {
-    if (!payload) return null;
-    if (typeof payload === "string") return payload;
-    return payload?.detail || payload?.error || payload?.message || null;
   }
 
   function unwrapMemory(payload: any): any {
@@ -201,120 +161,9 @@ export default function MemoryDetailPage(props: Props) {
     return [];
   }
 
-  async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
-    const ctrl = (init.signal ? null : new AbortController()) as AbortController | null;
-    const signal = (init.signal as AbortSignal | undefined) ?? ctrl?.signal;
-
-    const tmr = setTimeout(() => {
-      try {
-        ctrl?.abort();
-      } catch {
-        // ignore
-      }
-    }, timeoutMs);
-
-    try {
-      const res = await fetch(url, { ...init, signal });
-      return res;
-    } finally {
-      clearTimeout(tmr);
-    }
-  }
-
-  async function apiGet(path: string, externalSignal?: AbortSignal): Promise<any> {
-    if (!token) {
-      const err: any = new Error("Sessão expirada. Faça login novamente.");
-      err.status = 401;
-      throw err;
-    }
-
-    const res = await fetchWithTimeout(
-      `${API_BASE}${path}`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-        signal: externalSignal,
-      },
-      REQ_TIMEOUT_MS
-    );
-
-    if (!res.ok) {
-      const payload = await readJsonOrText(res);
-      const msg = messageFromErrorPayload(payload);
-      const err: any = new Error(msg || `HTTP ${res.status}`);
-      err.status = res.status;
-      err.payload = payload;
-      throw err;
-    }
-
-    const ct = res.headers.get("content-type") || "";
-    if (!ct.includes("application/json")) {
-      const txt = await res.text();
-      throw new Error(`Resposta não-JSON (${res.status}). Início: ${txt.slice(0, 80)}`);
-    }
-
-    return res.json();
-  }
-
-  async function apiPut(path: string, body: any, externalSignal?: AbortSignal): Promise<any> {
-    if (!token) {
-      const err: any = new Error("Sessão expirada. Faça login novamente.");
-      err.status = 401;
-      throw err;
-    }
-
-    const res = await fetchWithTimeout(
-      `${API_BASE}${path}`,
-      {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-        cache: "no-store",
-        signal: externalSignal,
-      },
-      REQ_TIMEOUT_MS
-    );
-
-    if (!res.ok) {
-      const payload = await readJsonOrText(res);
-      const msg = messageFromErrorPayload(payload);
-
-      const txt = typeof payload === "string" ? payload : "";
-      const hint =
-        res.status === 404 && txt.includes("Not Found")
-          ? "Not Found — verifique o proxy do Vite para /api (deve apontar para http://hdud-api:4000)."
-          : null;
-
-      const err: any = new Error(msg || hint || `HTTP ${res.status}`);
-      err.status = res.status;
-      err.payload = payload;
-      throw err;
-    }
-
-    const ct = res.headers.get("content-type") || "";
-    if (ct.includes("application/json")) {
-      try {
-        return await res.json();
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-
   const loadDetail = useCallback(async () => {
     if (!memoryIdNum) return;
 
-    if (!token) {
-      setErrorDetail("Sessão expirada. Faça login novamente.");
-      hardLogout();
-      return;
-    }
-
-    // abort request anterior (se houver)
     try {
       detailAbortRef.current?.abort();
     } catch {
@@ -323,12 +172,7 @@ export default function MemoryDetailPage(props: Props) {
     const ctrl = new AbortController();
     detailAbortRef.current = ctrl;
 
-    if (inflightDetail.current) {
-      // Se estava inflight, abort acima já garante que não pendura.
-      // Não retornamos aqui porque queremos substituir a request.
-    }
     inflightDetail.current = true;
-
     setLoadingDetail(true);
     setErrorDetail(null);
 
@@ -348,33 +192,18 @@ export default function MemoryDetailPage(props: Props) {
         raw: m,
       });
     } catch (e: any) {
-      if (isAbortError(e)) {
-        // request substituída/timeout -> não mostra erro barulhento
-        return;
-      }
-      console.error(e);
-      if (e?.status === 401) {
-        setErrorDetail("Sessão expirada. Faça login novamente.");
-        hardLogout();
-      } else {
-        setErrorDetail(e?.message ?? "Erro ao carregar memória.");
-      }
+      if (isAbortError(e)) return;
+      // 401/403 já derruba via handler global. Aqui mostramos só erro genérico se sobrar algo.
+      setErrorDetail(e?.message ?? "Erro ao carregar memória.");
     } finally {
       setLoadingDetail(false);
       inflightDetail.current = false;
     }
-  }, [hardLogout, memoryIdNum, token]);
+  }, [memoryIdNum]);
 
   const loadVersions = useCallback(async () => {
     if (!memoryIdNum) return;
 
-    if (!token) {
-      setErrorVersions("Sessão expirada. Faça login novamente.");
-      hardLogout();
-      return;
-    }
-
-    // abort request anterior (se houver)
     try {
       versionsAbortRef.current?.abort();
     } catch {
@@ -384,7 +213,6 @@ export default function MemoryDetailPage(props: Props) {
     versionsAbortRef.current = ctrl;
 
     inflightVersions.current = true;
-
     setLoadingVersions(true);
     setErrorVersions(null);
 
@@ -412,22 +240,14 @@ export default function MemoryDetailPage(props: Props) {
         return null;
       });
     } catch (e: any) {
-      if (isAbortError(e)) {
-        return;
-      }
-      console.error(e);
-      if (e?.status === 401) {
-        setErrorVersions("Sessão expirada. Faça login novamente.");
-        hardLogout();
-      } else {
-        setErrorVersions(e?.message ?? "Erro ao carregar versões.");
-      }
+      if (isAbortError(e)) return;
+      setErrorVersions(e?.message ?? "Erro ao carregar versões.");
       setVersions([]);
     } finally {
       setLoadingVersions(false);
       inflightVersions.current = false;
     }
-  }, [hardLogout, memoryIdNum, token]);
+  }, [memoryIdNum]);
 
   function startEdit() {
     if (!memory) return;
@@ -460,12 +280,6 @@ export default function MemoryDetailPage(props: Props) {
     setSuccessEdit(null);
     setErrorEdit(null);
 
-    if (!token) {
-      setErrorEdit("Sessão expirada. Faça login novamente.");
-      hardLogout();
-      return;
-    }
-
     const contentTrim = (draftContent ?? "").trim();
     if (!contentTrim) {
       setErrorEdit("Conteúdo é obrigatório.");
@@ -475,7 +289,6 @@ export default function MemoryDetailPage(props: Props) {
     const titleTrim = (draftTitle ?? "").trim();
     const payload: any = { content: contentTrim, title: titleTrim ? titleTrim : null };
 
-    // abort PUT anterior (se houver)
     try {
       putAbortRef.current?.abort();
     } catch {
@@ -488,7 +301,6 @@ export default function MemoryDetailPage(props: Props) {
     try {
       await apiPut(`/memory/${memoryIdNum}`, payload, ctrl.signal);
 
-      // Recarrega com aborto/timeout seguro
       await loadDetail();
       await loadVersions();
 
@@ -496,13 +308,7 @@ export default function MemoryDetailPage(props: Props) {
       setSuccessEdit("Alterações salvas — nova versão registrada.");
     } catch (e: any) {
       if (isAbortError(e)) return;
-      console.error(e);
-      if (e?.status === 401) {
-        setErrorEdit("Sessão expirada. Faça login novamente.");
-        hardLogout();
-      } else {
-        setErrorEdit(e?.message ?? "Erro ao salvar alterações.");
-      }
+      setErrorEdit(e?.message ?? "Erro ao salvar alterações.");
     } finally {
       setSavingEdit(false);
     }
@@ -512,24 +318,16 @@ export default function MemoryDetailPage(props: Props) {
     if (!memoryIdNum) return;
     if (!canEdit) return;
 
-    if (!token) {
-      setErrorEdit("Sessão expirada. Faça login novamente.");
-      hardLogout();
-      return;
-    }
-
     const ok = window.confirm(
       `Restaurar a versão v${v.version_number}?\n\n` +
         `Isso criará uma NOVA versão baseada nessa versão.\n` +
         `O histórico não será apagado.`
     );
-
     if (!ok) return;
 
     setErrorEdit(null);
     setSuccessEdit(null);
 
-    // abort PUT anterior (se houver)
     try {
       putAbortRef.current?.abort();
     } catch {
@@ -546,9 +344,7 @@ export default function MemoryDetailPage(props: Props) {
         content: (v.content ?? "").trim(),
       };
 
-      if (!payload.content) {
-        throw new Error("Não é possível restaurar uma versão sem conteúdo.");
-      }
+      if (!payload.content) throw new Error("Não é possível restaurar uma versão sem conteúdo.");
 
       await apiPut(`/memory/${memoryIdNum}`, payload, ctrl.signal);
 
@@ -558,13 +354,7 @@ export default function MemoryDetailPage(props: Props) {
       setSuccessEdit(`Rollback criado: nova versão baseada na v${v.version_number}.`);
     } catch (e: any) {
       if (isAbortError(e)) return;
-      console.error(e);
-      if (e?.status === 401) {
-        setErrorEdit("Sessão expirada. Faça login novamente.");
-        hardLogout();
-      } else {
-        setErrorEdit(e?.message ?? "Erro ao restaurar versão.");
-      }
+      setErrorEdit(e?.message ?? "Erro ao restaurar versão.");
     } finally {
       setSavingEdit(false);
     }
@@ -604,9 +394,8 @@ export default function MemoryDetailPage(props: Props) {
   const diffRows: DiffRow[] =
     showDiff && canCompare ? diffLines(getVersionContent(diffVA), getVersionContent(diffVB)) : [];
 
-  // ✅ LOAD inicial: só depende de (id/token). E sempre aborta ao trocar.
+  // LOAD inicial
   useEffect(() => {
-    // cleanup sempre aborta qualquer request pendurada ao trocar de rota/token
     try {
       detailAbortRef.current?.abort();
       versionsAbortRef.current?.abort();
@@ -617,13 +406,6 @@ export default function MemoryDetailPage(props: Props) {
 
     if (!memoryIdNum) return;
 
-    if (!token) {
-      setErrorDetail("Sessão expirada. Faça login novamente.");
-      hardLogout();
-      return;
-    }
-
-    // dispara 1x por mudança real de id/token
     loadDetail();
     loadVersions();
 
@@ -636,7 +418,7 @@ export default function MemoryDetailPage(props: Props) {
         // ignore
       }
     };
-  }, [memoryIdNum, token, hardLogout, loadDetail, loadVersions]);
+  }, [memoryIdNum, loadDetail, loadVersions]);
 
   const breadcrumbLabel = ((memory?.title ?? "") as string).trim()
     ? (memory!.title as string)
@@ -698,7 +480,12 @@ export default function MemoryDetailPage(props: Props) {
 
         {errorDetail && <p style={{ color: t.errText }}>{errorDetail}</p>}
 
-        {!errorDetail && !loadingDetail && !memory && <p style={{ color: t.text2 }}>Memória não encontrada.</p>}
+        {!errorDetail && !loadingDetail && !memory && (
+          <p style={{ color: t.text2 }}>
+            Memória não encontrada.
+            {tokenHint ? "" : " (Sessão pode ter expirado.)"}
+          </p>
+        )}
 
         {memory && (
           <>
@@ -834,7 +621,6 @@ export default function MemoryDetailPage(props: Props) {
               </div>
             </div>
 
-            {/* Feedback edição */}
             {(errorEdit || successEdit) && (
               <div
                 style={{

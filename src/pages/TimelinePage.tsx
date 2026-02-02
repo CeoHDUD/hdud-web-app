@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { apiRequest, getAuthSnapshot, ApiError, API_BASE } from "../lib/api";
 
 type TimelineKind = "Memória" | "Capítulo" | "Versão" | "Rollback" | "Evento";
 
@@ -23,65 +24,6 @@ type TimelineResponse = {
 };
 
 type FilterKey = "Tudo" | "Memórias" | "Capítulos" | "Versões" | "Rollbacks";
-
-// =====================
-// Auth / API helpers (MVP)
-// =====================
-const API_BASE = "/api";
-
-// Mantém compat com as chaves que já apareceram nos testes
-function getTokenFromStorage(): string | null {
-  return (
-    window.localStorage.getItem("HDUD_TOKEN") ||
-    window.localStorage.getItem("access_token") ||
-    window.localStorage.getItem("token") ||
-    null
-  );
-}
-
-async function readJsonOrText(res: Response): Promise<any> {
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    try {
-      return await res.json();
-    } catch {
-      return null;
-    }
-  }
-  try {
-    return await res.text();
-  } catch {
-    return null;
-  }
-}
-
-function messageFromErrorPayload(payload: any): string | null {
-  if (!payload) return null;
-  if (typeof payload === "string") return payload;
-  return payload?.detail || payload?.error || payload?.message || null;
-}
-
-async function fetchTimeline(token: string | null, signal?: AbortSignal) {
-  const url = `${API_BASE}/timeline`;
-
-  const headers: Record<string, string> = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  const res = await fetch(url, { headers, cache: "no-store", signal });
-
-  if (!res.ok) {
-    const payload = await readJsonOrText(res);
-    const msg = messageFromErrorPayload(payload) || `HTTP ${res.status}`;
-    const err: any = new Error(msg);
-    err.status = res.status;
-    err.payload = payload;
-    err.url = url;
-    throw err;
-  }
-
-  const payload = (await readJsonOrText(res)) as TimelineResponse | any;
-  return { url, payload };
-}
 
 // =====================
 // Date / formatting
@@ -169,7 +111,6 @@ function extractNumberFromAny(v: any): number | null {
 function extractMemoryId(ev: TimelineEvent): number | null {
   const raw = ev.raw || {};
 
-  // 1) Preferencial: campos explícitos (quando o agregador expõe)
   const direct =
     extractNumberFromAny(raw?.memory_id) ??
     extractNumberFromAny(raw?.memoryId) ??
@@ -182,11 +123,9 @@ function extractMemoryId(ev: TimelineEvent): number | null {
 
   if (direct != null) return direct;
 
-  // 2) Se o próprio "id" do evento for numérico
   const asId = extractNumberFromAny(ev.id);
   if (asId != null) return asId;
 
-  // 3) Heurística: tentar achar número em "id" ou "title" (ex: "memory:79", "#79", "Memória 79")
   const joined = `${ev.id || ""} ${ev.title || ""}`.trim();
   const m = joined.match(/(?:#|memory:|memoria:|memória:|memoria\s+|memória\s+)?(\d{1,9})\b/i);
   if (m?.[1]) {
@@ -197,41 +136,33 @@ function extractMemoryId(ev: TimelineEvent): number | null {
   return null;
 }
 
-// =====================
-// Page
-// =====================
 export default function TimelinePage() {
   const nav = useNavigate();
 
   const filters: FilterKey[] = ["Tudo", "Memórias", "Capítulos", "Versões", "Rollbacks"];
 
   const [activeFilter, setActiveFilter] = useState<FilterKey>("Tudo");
-  const [q, setQ] = useState(""); // ✅ search MVP
+  const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // debug leve (pra nunca ficar no escuro)
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugInfo, setDebugInfo] = useState<{
     usedUrl: string;
-    authSent: boolean;
     httpStatus: number | null;
-    tokenPresent: boolean;
+    auth: ReturnType<typeof getAuthSnapshot>;
   }>({
     usedUrl: `${API_BASE}/timeline`,
-    authSent: false,
     httpStatus: null,
-    tokenPresent: Boolean(getTokenFromStorage()),
+    auth: getAuthSnapshot(),
   });
 
-  // guards anti-concorrência + anti-StrictMode double fire
   const inflightRef = useRef(false);
   const seqRef = useRef(0);
-  const lastLoadedKeyRef = useRef<string>(""); // key por token presence
-  const abortRef = useRef<AbortController | null>(null);
+  const lastLoadedKeyRef = useRef<string>("");
 
   const load = useCallback(async () => {
     if (inflightRef.current) return;
@@ -242,21 +173,9 @@ export default function TimelinePage() {
     setLoading(true);
     setErrorMsg(null);
 
-    const token = getTokenFromStorage();
-
-    // abort request anterior (se houver)
     try {
-      abortRef.current?.abort();
-    } catch {
-      // ignore
-    }
-    const ac = new AbortController();
-    abortRef.current = ac;
+      const payload = await apiRequest<TimelineResponse>("/timeline", { method: "GET" });
 
-    try {
-      const { url, payload } = await fetchTimeline(token, ac.signal);
-
-      // stale guard
       if (mySeq !== seqRef.current) return;
 
       const items = Array.isArray(payload?.items) ? (payload.items as TimelineEvent[]) : [];
@@ -267,26 +186,18 @@ export default function TimelinePage() {
       setLastUpdated(new Date());
 
       setDebugInfo({
-        usedUrl: url,
-        authSent: Boolean(token),
+        usedUrl: `${API_BASE}/timeline`,
         httpStatus: 200,
-        tokenPresent: Boolean(token),
+        auth: getAuthSnapshot(),
       });
     } catch (e: any) {
-      // stale guard
       if (mySeq !== seqRef.current) return;
 
-      if (e?.name === "AbortError") {
-        // request cancelada (normal)
-        return;
-      }
-
-      const status = e?.status ?? null;
+      const status = e instanceof ApiError ? e.status : null;
       setDebugInfo({
-        usedUrl: e?.url || `${API_BASE}/timeline`,
-        authSent: Boolean(getTokenFromStorage()),
+        usedUrl: `${API_BASE}/timeline`,
         httpStatus: status,
-        tokenPresent: Boolean(getTokenFromStorage()),
+        auth: getAuthSnapshot(),
       });
 
       const msg = e?.message || "Falha de rede ao carregar timeline.";
@@ -300,20 +211,12 @@ export default function TimelinePage() {
   }, []);
 
   useEffect(() => {
-    // ✅ Anti-duplicação StrictMode (DEV): mesma “sessão/token presence” não dispara 2x
-    const key = `timeline|token:${Boolean(getTokenFromStorage())}`;
+    // Anti StrictMode double-fire (DEV)
+    const key = `timeline|auth:${getAuthSnapshot().has_access_token}`;
     if (lastLoadedKeyRef.current === key) return;
     lastLoadedKeyRef.current = key;
 
     load();
-
-    return () => {
-      try {
-        abortRef.current?.abort();
-      } catch {
-        // ignore
-      }
-    };
   }, [load]);
 
   const filteredEvents = useMemo(() => {
@@ -376,17 +279,16 @@ export default function TimelinePage() {
   }, [loading, errorMsg]);
 
   const tokenBadge = useMemo(() => {
-    const ok = debugInfo.tokenPresent;
+    const snap = debugInfo.auth;
     return (
       <span className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium opacity-90">
         <span className="inline-block h-2 w-2 rounded-full border" aria-hidden="true" />
-        Token: {ok ? "detectado" : "ausente"}
+        Token: {snap.has_access_token ? "detectado" : "ausente"}
       </span>
     );
-  }, [debugInfo.tokenPresent]);
+  }, [debugInfo.auth]);
 
   const canOpenMemory = useCallback((ev: TimelineEvent) => {
-    // MVP: abrimos Memória (e versões/rollback se tiver memory_id)
     if (ev.kind === "Memória") return extractMemoryId(ev) != null;
     if (ev.kind === "Versão" || ev.kind === "Rollback") return extractMemoryId(ev) != null;
     return false;
@@ -403,14 +305,12 @@ export default function TimelinePage() {
 
   return (
     <div className="hdud-page space-y-4">
-      {/* Header */}
       <div className="hdud-card">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <h1 className="hdud-title">Timeline</h1>
             <p className="hdud-subtitle">
-              Linha do tempo unificada do que aconteceu na sua história — consumindo apenas o core{" "}
-              <code>{API_BASE}/timeline</code>.
+              Linha do tempo unificada — consumindo apenas o core <code>{API_BASE}/timeline</code>.
             </p>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -445,12 +345,16 @@ export default function TimelinePage() {
                     • Endpoint: <span className="font-medium">{debugInfo.usedUrl}</span>
                   </div>
                   <div>
-                    • Authorization enviado:{" "}
-                    <span className="font-medium">{debugInfo.authSent ? "sim" : "não"}</span>
-                  </div>
-                  <div>
                     • HTTP:{" "}
                     <span className="font-medium">{debugInfo.httpStatus === null ? "—" : debugInfo.httpStatus}</span>
+                  </div>
+                  <div>
+                    • Access token:{" "}
+                    <span className="font-medium">{debugInfo.auth.has_access_token ? "sim" : "não"}</span>
+                  </div>
+                  <div>
+                    • Refresh token:{" "}
+                    <span className="font-medium">{debugInfo.auth.has_refresh_token ? "sim" : "não"}</span>
                   </div>
                 </div>
               </div>
@@ -472,7 +376,6 @@ export default function TimelinePage() {
         </div>
       </div>
 
-      {/* Filters + Search */}
       <div className="hdud-card">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
@@ -495,7 +398,7 @@ export default function TimelinePage() {
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          {filters.map((f) => {
+          {(["Tudo", "Memórias", "Capítulos", "Versões", "Rollbacks"] as FilterKey[]).map((f) => {
             const isActive = f === activeFilter;
             const count =
               f === "Tudo"
@@ -531,7 +434,6 @@ export default function TimelinePage() {
         )}
       </div>
 
-      {/* Events */}
       <div className="hdud-card">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -541,7 +443,6 @@ export default function TimelinePage() {
           <div className="text-xs opacity-70">{loading ? "Carregando..." : "Ativo"}</div>
         </div>
 
-        {/* Error / Loading / Empty */}
         {errorMsg ? (
           <div className="mt-4 rounded-xl border px-5 py-4">
             <div className="text-sm font-semibold">Não foi possível carregar a Timeline</div>
@@ -572,7 +473,6 @@ export default function TimelinePage() {
           <div className="mt-5 space-y-8">
             {grouped.map((g) => (
               <section key={g.day} className="space-y-4">
-                {/* Day Header */}
                 <div className="flex items-center gap-3">
                   <div className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide opacity-85">
                     {g.day}
@@ -580,7 +480,6 @@ export default function TimelinePage() {
                   <div className="h-px flex-1 border-t opacity-60" />
                 </div>
 
-                {/* Timeline list */}
                 <div className="relative">
                   <div className="absolute left-[14px] top-0 h-full border-l opacity-40" aria-hidden="true" />
 
@@ -595,7 +494,6 @@ export default function TimelinePage() {
 
                       return (
                         <div key={it.id} className="relative pl-10">
-                          {/* dot */}
                           <div
                             className="absolute left-[9px] top-4 h-[12px] w-[12px] rounded-full border bg-white"
                             aria-hidden="true"
@@ -671,7 +569,6 @@ export default function TimelinePage() {
 
         <div className="mt-5 rounded-lg border px-4 py-3 text-xs opacity-75">
           Observação: esta tela <span className="font-semibold">apenas consome</span> <code>{API_BASE}/timeline</code>.
-          Se o agregador ainda não emitir versões/rollbacks, elas aparecem conforme o core passar a expor esses eventos.
         </div>
       </div>
     </div>

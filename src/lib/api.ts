@@ -28,7 +28,7 @@ function getBaseUrl(): string {
 // ✅ Compat (alguns arquivos antigos importavam API_BASE como constante)
 export const API_BASE = getBaseUrl();
 
-// ✅ Handler global para 401/jwt expired (registrado pelo App.tsx)
+// ✅ Handler global para 401/403 (registrado pelo App.tsx)
 let unauthorizedHandler: (() => void) | null = null;
 
 export function setUnauthorizedHandler(fn: (() => void) | null) {
@@ -47,10 +47,11 @@ export function parseJsonSafe(text: string): any {
  * =========================
  * TOKENS (Access + Refresh)
  * =========================
- * Mantém compat com chaves antigas e adiciona refresh_token para o /auth/refresh real do backend.
+ * - storage é a fonte de verdade
+ * - mantém compat com chaves antigas
  */
 
-function getAccessToken(): string | null {
+export function getAccessToken(): string | null {
   return (
     localStorage.getItem("HDUD_TOKEN") ||
     localStorage.getItem("hdud_access_token") ||
@@ -60,40 +61,63 @@ function getAccessToken(): string | null {
 }
 
 function setAccessToken(token: string) {
-  // Mantém compat com chaves antigas, mas define uma “fonte” primária.
-  localStorage.setItem("HDUD_TOKEN", token);
-  localStorage.setItem("hdud_access_token", token);
-  localStorage.setItem("access_token", token);
-  localStorage.setItem("token", token);
+  const t = String(token || "").trim();
+  if (!t) return;
+
+  localStorage.setItem("HDUD_TOKEN", t);
+  localStorage.setItem("hdud_access_token", t);
+  localStorage.setItem("access_token", t);
+  localStorage.setItem("token", t);
 }
 
 function getRefreshToken(): string | null {
-  return (
-    localStorage.getItem("hdud_refresh_token") ||
-    localStorage.getItem("refresh_token")
-  );
+  return localStorage.getItem("hdud_refresh_token") || localStorage.getItem("refresh_token");
 }
 
 function setRefreshToken(refresh: string) {
-  localStorage.setItem("hdud_refresh_token", refresh);
-  localStorage.setItem("refresh_token", refresh);
+  const rt = String(refresh || "").trim();
+  if (!rt) return;
+
+  localStorage.setItem("hdud_refresh_token", rt);
+  localStorage.setItem("refresh_token", rt);
 }
 
-export function clearAuthTokens() {
-  // access (todas as chaves compat)
-  localStorage.removeItem("HDUD_TOKEN");
-  localStorage.removeItem("hdud_access_token");
-  localStorage.removeItem("access_token");
-  localStorage.removeItem("token");
+// ✅ usado pelo App.tsx (MVP)
+export function clearHdudSession() {
+  const keys = [
+    // access compat
+    "HDUD_TOKEN",
+    "hdud_access_token",
+    "access_token",
+    "token",
 
-  // refresh (novas chaves)
-  localStorage.removeItem("hdud_refresh_token");
-  localStorage.removeItem("refresh_token");
+    // refresh compat
+    "hdud_refresh_token",
+    "refresh_token",
+
+    // outras chaves que aparecem no app
+    "author_id",
+    "HDUD_AUTHOR_ID",
+    "user_id",
+    "email",
+  ];
+  for (const k of keys) localStorage.removeItem(k);
+}
+
+// ✅ mantido por compat (caso alguém importe)
+export function clearAuthTokens() {
+  clearHdudSession();
+}
+
+// Helper opcional: pode ser usado no Login
+export function setAuthTokens(access_token: string, refresh_token?: string) {
+  if (access_token) setAccessToken(access_token);
+  if (refresh_token) setRefreshToken(refresh_token);
 }
 
 /**
  * ============================
- * Refresh + Retry (profissional)
+ * Refresh + Retry (single-flight)
  * ============================
  */
 
@@ -101,6 +125,7 @@ type ApiRequestOptions = {
   method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: any;
   headers?: Record<string, string>;
+  signal?: AbortSignal;
   /**
    * Se true: não tenta refresh/retry automático.
    * Útil para chamadas que NÃO podem disparar retry (ex.: o próprio /auth/refresh).
@@ -113,8 +138,6 @@ let refreshInFlight: Promise<{ access_token: string; refresh_token?: string } | 
 function extractAccessTokenFromPayload(payload: any): string | null {
   if (!payload) return null;
 
-  // Variações comuns:
-  // { access_token }, { token }, { accessToken }, { jwt }
   const token =
     payload.access_token ||
     payload.token ||
@@ -131,30 +154,22 @@ function extractAccessTokenFromPayload(payload: any): string | null {
 function extractRefreshTokenFromPayload(payload: any): string | null {
   if (!payload) return null;
 
-  const rt =
-    payload.refresh_token ||
-    payload.refreshToken ||
-    payload.data?.refresh_token ||
-    payload.data?.refreshToken;
+  const rt = payload.refresh_token || payload.refreshToken || payload.data?.refresh_token || payload.data?.refreshToken;
 
   return typeof rt === "string" && rt.trim() ? rt.trim() : null;
 }
 
 async function refreshTokenOnce(baseUrl: string): Promise<{ access_token: string; refresh_token?: string } | null> {
-  // Single-flight: múltiplas requests 401 aguardam a mesma promise.
   if (refreshInFlight) return refreshInFlight;
 
   refreshInFlight = (async () => {
     const url = `${baseUrl}/auth/refresh`;
     const refresh_token = getRefreshToken();
-
-    // Se não houver refresh_token, não há como renovar
     if (!refresh_token) return null;
 
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // ✅ Contrato do backend: { refresh_token }
       body: JSON.stringify({ refresh_token }),
     });
 
@@ -175,7 +190,6 @@ async function refreshTokenOnce(baseUrl: string): Promise<{ access_token: string
 
     const rotatedRefresh = extractRefreshTokenFromPayload(payload) || undefined;
 
-    // Persistir
     setAccessToken(newAccess);
     if (rotatedRefresh) setRefreshToken(rotatedRefresh);
 
@@ -201,11 +215,7 @@ async function callUnauthorizedHandlerSafe() {
   }
 }
 
-async function apiRequestInternal<T = any>(
-  path: string,
-  options: ApiRequestOptions = {},
-  attempt: number = 0
-): Promise<T> {
+async function apiRequestInternal<T = any>(path: string, options: ApiRequestOptions = {}, attempt = 0): Promise<T> {
   const baseUrl = getBaseUrl();
   const url = `${baseUrl}${path}`;
 
@@ -215,11 +225,9 @@ async function apiRequestInternal<T = any>(
     ...(options.headers || {}),
   };
 
-  // Autoriza sempre que houver token
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const isFormData =
-    typeof FormData !== "undefined" && options.body instanceof FormData;
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
 
   if (options.body !== undefined && !isFormData) {
     headers["Content-Type"] = "application/json";
@@ -228,12 +236,8 @@ async function apiRequestInternal<T = any>(
   const res = await fetch(url, {
     method: options.method || "GET",
     headers,
-    body:
-      options.body === undefined
-        ? undefined
-        : isFormData
-        ? options.body
-        : JSON.stringify(options.body),
+    body: options.body === undefined ? undefined : isFormData ? options.body : JSON.stringify(options.body),
+    signal: options.signal,
   });
 
   const contentType = res.headers.get("content-type") || "";
@@ -246,66 +250,49 @@ async function apiRequestInternal<T = any>(
     // ignore
   }
 
-  // ✅ 401: tenta refresh + retry automático (1 vez)
-  if (res.status === 401) {
-    const skip =
-      options.skipAuthRetry === true || isRefreshEndpoint(path) === true;
+  // ✅ 401/403: sessão inválida -> tenta refresh (apenas 401) + retry; senão derruba
+  const isAuthFail = res.status === 401 || res.status === 403;
 
-    if (!skip && attempt === 0) {
+  if (isAuthFail) {
+    const skip = options.skipAuthRetry === true || isRefreshEndpoint(path) === true;
+
+    // Só tenta refresh para 401 (expirado). 403 -> derruba direto (perm negada / token inválido)
+    if (res.status === 401 && !skip && attempt === 0) {
       const refreshed = await refreshTokenOnce(baseUrl);
-
       if (refreshed?.access_token) {
-        // Retry do request original com o token atualizado (já persistido).
         return apiRequestInternal<T>(path, options, 1);
       }
     }
 
-    // Falhou refresh ou já tentou retry -> encerra sessão
     await callUnauthorizedHandlerSafe();
 
-    const msg =
-      (payload && (payload.detail || payload.error)) || `HTTP 401 Unauthorized`;
-    throw new ApiError(msg, 401, payload);
+    const msg = (payload && (payload.detail || payload.error)) || `HTTP ${res.status} Unauthorized`;
+    throw new ApiError(msg, res.status, payload);
   }
 
   if (!res.ok) {
-    const msg =
-      (payload && (payload.detail || payload.error)) ||
-      `HTTP ${res.status} ${res.statusText}`;
+    const msg = (payload && (payload.detail || payload.error)) || `HTTP ${res.status} ${res.statusText}`;
     throw new ApiError(msg, res.status, payload);
   }
 
   return payload as T;
 }
 
-export async function apiRequest<T = any>(
-  path: string,
-  options: ApiRequestOptions = {}
-): Promise<T> {
+export async function apiRequest<T = any>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   return apiRequestInternal<T>(path, options, 0);
 }
 
-export function apiGet<T = any>(path: string) {
-  return apiRequest<T>(path, { method: "GET" });
+export function apiGet<T = any>(path: string, signal?: AbortSignal) {
+  return apiRequest<T>(path, { method: "GET", signal });
 }
 
-export function apiPost<T = any>(path: string, body?: any) {
-  return apiRequest<T>(path, { method: "POST", body });
+export function apiPost<T = any>(path: string, body?: any, signal?: AbortSignal) {
+  return apiRequest<T>(path, { method: "POST", body, signal });
 }
 
-export function apiPut<T = any>(path: string, body?: any) {
-  return apiRequest<T>(path, { method: "PUT", body });
+export function apiPut<T = any>(path: string, body?: any, signal?: AbortSignal) {
+  return apiRequest<T>(path, { method: "PUT", body, signal });
 }
 
-// Compat: algumas páginas antigas importavam `apiFetch`.
-// Mantemos como alias seguro para evitar quebrar build.
+// Compat
 export const apiFetch = apiRequest;
-
-/**
- * Helper opcional (se você quiser chamar no login):
- * - setAccessToken + setRefreshToken
- */
-export function setAuthTokens(access_token: string, refresh_token?: string) {
-  if (access_token) setAccessToken(access_token);
-  if (refresh_token) setRefreshToken(refresh_token);
-}
