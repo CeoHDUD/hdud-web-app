@@ -1,3 +1,4 @@
+// C:\HDUD_DATA\hdud-web-app\src\pages\ChaptersPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
@@ -6,10 +7,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - Lista à esquerda + editor à direita
  * - Ações: salvar / publicar / despublicar / recarregar
  *
- * ✅ Ajuste vNext.2 (Trilhos):
- * - Mantém UI/UX congelada; só melhora a camada de chamada da API.
- * - Diagnóstico: mostra qual endpoint foi tentado/usado e status (para matar 404 no escuro).
- * - Fallback: tenta múltiplas rotas comuns (compat) antes de desistir.
+ * ✅ Ajuste (Home mental = Capítulos):
+ * - Home mental: Capítulos são o “mapa” (fases/estrutura). Ação principal: entrar/editar um capítulo.
+ * - Memórias/Core NÃO entram aqui (somente camada narrativa do capítulo).
+ * - UI mais “lugar / livro”, menos “dashboard”.
  */
 
 type ChapterStatus = "DRAFT" | "PUBLIC";
@@ -51,8 +52,7 @@ function formatDateBR(v?: string | null) {
 }
 
 const DEFAULT_NEW_TITLE = "Novo capítulo";
-const DEFAULT_NEW_DESCRIPTION =
-  "Resumo curto para a lista (o que o leitor vai sentir/entender).";
+const DEFAULT_NEW_DESCRIPTION = "Uma frase curta: sobre o que é essa fase da sua vida?";
 
 function safeTrimOrNull(v: any): string | null {
   if (v == null) return null;
@@ -170,6 +170,12 @@ function formatAttempts(attempts: Array<{ path: string; status: number; ok: bool
   return attempts.length > 4 ? `${short} | …` : short;
 }
 
+function compactText(v: string, max = 120) {
+  const s = (v ?? "").toString().replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
 export default function ChaptersPage() {
   const token = useMemo(() => getToken(), []);
   const canUseApi = !!token;
@@ -204,6 +210,12 @@ export default function ChaptersPage() {
   // diagnóstico leve (sem mexer no core): mostra qual rota funcionou / falhou
   const [lastApiInfo, setLastApiInfo] = useState<string>("");
 
+  // ✅ UX: debug colapsável (não polui a “cara de produto”)
+  const [showDiag, setShowDiag] = useState<boolean>(false);
+
+  // Home mental: pequena busca local (não toca API, só filtra lista)
+  const [q, setQ] = useState<string>("");
+
   // ✅ controle: só limpa template no 1º foco (evita “não limpa quando digito”)
   const didFocusTitle = useRef(false);
   const didFocusDesc = useRef(false);
@@ -237,8 +249,6 @@ export default function ChaptersPage() {
     setLoading(true);
     setToast(null);
 
-    // Compat: não sabemos qual rota ficou no backend (404 na tela).
-    // Então tentamos rotas comuns de “chapters” + rota por author.
     const result = await tryMany<any>([
       () => apiRequest<any>("/api/chapters", { method: "GET" }),
       () => apiRequest<any>("/api/chapter", { method: "GET" }),
@@ -261,10 +271,7 @@ export default function ChaptersPage() {
           ? "404 (rota não existe no backend)."
           : `HTTP ${result.status || "erro"}`;
 
-      setToastAuto({
-        kind: "err",
-        msg: `Falha ao carregar lista de capítulos (${hint}).`,
-      });
+      setToastAuto({ kind: "err", msg: `Falha ao carregar capítulos (${hint}).` });
       return;
     }
 
@@ -320,7 +327,7 @@ export default function ChaptersPage() {
           ? "404 (rota não existe / id não encontrado)."
           : `HTTP ${result.status || "erro"}`;
 
-      setToastAuto({ kind: "err", msg: `Falha ao carregar capítulo (${hint}).` });
+      setToastAuto({ kind: "err", msg: `Falha ao abrir capítulo (${hint}).` });
       return;
     }
 
@@ -448,7 +455,7 @@ export default function ChaptersPage() {
           ? "404 (rota de update não existe no backend)."
           : `HTTP ${result.status || "erro"}`;
 
-      setToastAuto({ kind: "err", msg: `Falha ao salvar capítulo (${hint}).` });
+      setToastAuto({ kind: "err", msg: `Falha ao salvar (${hint}).` });
       return;
     }
 
@@ -468,8 +475,8 @@ export default function ChaptersPage() {
     const result = await tryMany<any>([
       () => apiRequest<any>(`/api/chapters/${selectedChapterId}/publish`, { method: "POST" }),
       () => apiRequest<any>(`/api/chapter/${selectedChapterId}/publish`, { method: "POST" }),
-      () => apiRequest<any>(`/api/chapters/${selectedChapterId}/publicar`, { method: "POST" }), // compat PT
-      () => apiRequest<any>(`/api/chapter/${selectedChapterId}/publicar`, { method: "POST" }), // compat PT
+      () => apiRequest<any>(`/api/chapters/${selectedChapterId}/publicar`, { method: "POST" }),
+      () => apiRequest<any>(`/api/chapter/${selectedChapterId}/publicar`, { method: "POST" }),
       () =>
         apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}/publish`, {
           method: "POST",
@@ -511,8 +518,8 @@ export default function ChaptersPage() {
     const result = await tryMany<any>([
       () => apiRequest<any>(`/api/chapters/${selectedChapterId}/unpublish`, { method: "POST" }),
       () => apiRequest<any>(`/api/chapter/${selectedChapterId}/unpublish`, { method: "POST" }),
-      () => apiRequest<any>(`/api/chapters/${selectedChapterId}/despublicar`, { method: "POST" }), // compat PT
-      () => apiRequest<any>(`/api/chapter/${selectedChapterId}/despublicar`, { method: "POST" }), // compat PT
+      () => apiRequest<any>(`/api/chapters/${selectedChapterId}/despublicar`, { method: "POST" }),
+      () => apiRequest<any>(`/api/chapter/${selectedChapterId}/despublicar`, { method: "POST" }),
       () =>
         apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}/unpublish`, {
           method: "POST",
@@ -547,24 +554,37 @@ export default function ChaptersPage() {
   const headerCount = items.length;
   const statusBadgeStyle = status === "PUBLIC" ? styles.badgePublic : styles.badgeDraft;
 
+  const filteredItems = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return items;
+    return items.filter((c) => {
+      const t = (c.title ?? "").toLowerCase();
+      const d = (c.description ?? "").toLowerCase();
+      return t.includes(needle) || d.includes(needle);
+    });
+  }, [items, q]);
+
   useEffect(() => {
     void loadList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const selectedTitlePreview = title?.trim() ? title.trim() : selectedChapterId ? "Capítulo" : "—";
 
   return (
     <div style={styles.page}>
       <div style={styles.headerCard}>
         <div style={styles.headerRow}>
           <div>
-            <div style={styles.h1}>Capítulos</div>
+            <div style={styles.h1}>Sua jornada</div>
             <div style={styles.sub}>
-              Rascunhos, versões, publicação e continuidade — mantendo o core intacto.
+              Aqui você organiza sua história em <b>capítulos</b> (fases). Entre em um capítulo, escreva, refine e publique quando quiser.
+              <span style={{ opacity: 0.8 }}> Memórias/Timeline continuam no core — fora desta tela.</span>
             </div>
           </div>
 
           <div style={styles.headerActions}>
-            <div style={styles.pill}>camada narrativa • API real • sem tocar em Memórias/Core</div>
+            <div style={styles.pill}>jornada • capítulos = fases • escrita com calma</div>
             <button
               style={{ ...styles.btn, ...(loading ? styles.btnDisabled : {}) }}
               onClick={loadList}
@@ -584,11 +604,33 @@ export default function ChaptersPage() {
           </div>
         </div>
 
+        {/* ✅ meta + diagnóstico colapsável */}
         <div style={styles.headerMeta}>
-          <span style={styles.smallMuted}>
-            {authorId ? `author_id: ${authorId}` : "author_id: —"} • {headerCount} capítulo(s)
-            {lastApiInfo ? ` • API: ${lastApiInfo}` : ""}
-          </span>
+          <div style={styles.metaRow}>
+            <span style={styles.smallMuted}>
+              {authorId ? `author_id: ${authorId}` : "author_id: —"} • {headerCount} capítulo(s)
+            </span>
+
+            <button
+              type="button"
+              style={styles.diagToggle}
+              onClick={() => setShowDiag((v) => !v)}
+              title="Mostrar/ocultar diagnóstico de rotas (sem tocar API)"
+            >
+              {showDiag ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
+            </button>
+          </div>
+
+          {showDiag && (
+            <div style={styles.diagBox}>
+              <div style={styles.diagLine}>
+                <b>API</b>: {lastApiInfo || "—"}
+              </div>
+              <div style={styles.diagHint}>
+                *diagnóstico local (rota que funcionou + tentativas). Não altera API.*
+              </div>
+            </div>
+          )}
         </div>
 
         {toast && (
@@ -611,17 +653,49 @@ export default function ChaptersPage() {
         {/* left: list */}
         <div style={styles.listCard}>
           <div style={styles.listHeader}>
-            <div style={styles.cardTitle}>Seus capítulos</div>
-            <div style={styles.cardMeta}>{items.length} item(ns)</div>
+            <div>
+              <div style={styles.cardTitle}>Etapas da sua jornada</div>
+              <div style={styles.cardMeta}>Fases/estruturas da sua história</div>
+            </div>
+
+            <div style={styles.cardMetaRight}>
+              <div style={styles.cardMeta}>{items.length} item(ns)</div>
+            </div>
+          </div>
+
+          <div style={styles.searchRow}>
+            <input
+              style={styles.searchInput}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Buscar por título ou descrição…"
+              aria-label="Buscar capítulos"
+            />
+            {q.trim() ? (
+              <button style={styles.searchClear} onClick={() => setQ("")} title="Limpar busca">
+                Limpar
+              </button>
+            ) : null}
           </div>
 
           {items.length === 0 ? (
             <div style={styles.emptyBox}>
-              Nenhum capítulo ainda. Clique em <b>+ Novo capítulo</b>.
+              <div style={styles.emptyTitle}>Sua casa ainda está vazia.</div>
+              <div style={styles.emptyText}>
+                Crie seu primeiro <b>capítulo</b> (uma fase da sua vida). Depois, você entra nele e escreve com calma — sem
+                pressa, sem “postar”.
+              </div>
+              <button style={{ ...styles.btnPrimary, marginTop: 10 }} onClick={createChapter} disabled={saving}>
+                + Criar meu primeiro capítulo
+              </button>
+            </div>
+          ) : filteredItems.length === 0 ? (
+            <div style={styles.emptyBox}>
+              Nenhum capítulo encontrado para <b>{q.trim()}</b>.
             </div>
           ) : (
             <div style={styles.listWrap}>
-              {items.map((c) => {
+              {filteredItems.map((c) => {
                 const isSelected = c.chapter_id === selectedChapterId;
                 const badgeStyle = c.status === "PUBLIC" ? styles.badgePublic : styles.badgeDraft;
 
@@ -630,17 +704,23 @@ export default function ChaptersPage() {
                     key={c.chapter_id}
                     style={{ ...styles.itemBtn, ...(isSelected ? styles.itemBtnActive : {}) }}
                     onClick={() => loadDetail(c.chapter_id)}
+                    title="Abrir capítulo"
                   >
                     <div style={styles.itemTop}>
                       <div style={styles.itemTitle}>
-                        Capítulo {c.chapter_id} — <b>{c.title || "Sem título"}</b>
+                        <b>{c.title || "Sem título"}</b>
+                        <span style={styles.itemId}>#{c.chapter_id}</span>
                       </div>
                       <span style={{ ...styles.badge, ...badgeStyle }}>
                         {c.status === "PUBLIC" ? "Público" : "Rascunho"}
                       </span>
                     </div>
+
                     <div style={styles.itemDesc}>{c.description || "—"}</div>
-                    <div style={styles.itemMeta}>Atualizado: {formatDateBR(c.updated_at)}</div>
+
+                    <div style={styles.itemMeta}>
+                      Atualizado: {formatDateBR(c.updated_at)} • Criado: {formatDateBR(c.created_at)}
+                    </div>
                   </button>
                 );
               })}
@@ -652,14 +732,14 @@ export default function ChaptersPage() {
         <div style={styles.editorCard}>
           <div style={styles.editorHeader}>
             <div>
-              <div style={styles.cardTitle}>Editando</div>
+              <div style={styles.cardTitle}>Escrevendo</div>
               <div style={styles.cardMeta}>
                 Criado: {createdAt} • Última atualização: {updatedAt} • Publicado: {publishedAt}
               </div>
             </div>
 
             <div style={styles.editorBadges}>
-              <span style={styles.badgeSoft}>Capítulo {selectedChapterId ?? "—"}</span>
+              <span style={styles.badgeSoft}>ID {selectedChapterId ?? "—"}</span>
               <span style={styles.badgeSoft}>{versionLabel}</span>
               <span style={{ ...styles.badge, ...statusBadgeStyle }}>
                 {status === "PUBLIC" ? "Público" : "Rascunho"}
@@ -703,74 +783,77 @@ export default function ChaptersPage() {
             </div>
           </div>
 
-          <div style={styles.form}>
-            <label style={styles.label}>
-              <span style={styles.labelTop}>Título (livre — sem forçar “Capítulo X”)</span>
-              <input
-                style={styles.input}
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                onFocus={() => {
-                  if (!didFocusTitle.current) {
-                    didFocusTitle.current = true;
-                    if (selectedChapterId && title === DEFAULT_NEW_TITLE) setTitle("");
-                  }
-                }}
-                placeholder="Ex.: Minha chegada ao mundo"
-              />
-              <span style={styles.counter}>{title.trim().length}/200</span>
-            </label>
-
-            <label style={styles.label}>
-              <span style={styles.labelTop}>Descrição (curta)</span>
-              <input
-                style={styles.input}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                onFocus={() => {
-                  if (!didFocusDesc.current) {
-                    didFocusDesc.current = true;
-                    if (selectedChapterId && description === DEFAULT_NEW_DESCRIPTION) setDescription("");
-                  }
-                }}
-                placeholder={DEFAULT_NEW_DESCRIPTION}
-              />
-              <span style={styles.counter}>{description.trim().length}/400</span>
-            </label>
-
-            <label style={styles.label}>
-              <span style={styles.labelTop}>Texto do capítulo</span>
-              <textarea
-                style={styles.textarea}
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                placeholder="Escreva aqui…"
-              />
-              <span style={styles.counter}>{(body || "").length} caracteres</span>
-            </label>
-
-            {!selectedChapterId && (
-              <div style={styles.note}>
-                Dica: clique em <b>+ Novo capítulo</b> para criar no banco e editar com id real.
+          {!selectedChapterId ? (
+            <div style={styles.rightEmpty}>
+              <div style={styles.rightEmptyTitle}>Escolha uma etapa</div>
+              <div style={styles.rightEmptyText}>
+                À esquerda, selecione um capítulo (uma fase). Aqui você escreve e refina o texto do capítulo, sem pressão.
               </div>
-            )}
-
-            <div style={styles.noteMuted}>
-              Nota: este módulo é “camada narrativa” determinística. Integração com IA/geração entra depois, sem mexer no core.
             </div>
-          </div>
+          ) : (
+            <div style={styles.form}>
+              <label style={styles.label}>
+                <span style={styles.labelTop}>Título (livre)</span>
+                <input
+                  style={styles.input}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onFocus={() => {
+                    if (!didFocusTitle.current) {
+                      didFocusTitle.current = true;
+                      if (selectedChapterId && title === DEFAULT_NEW_TITLE) setTitle("");
+                    }
+                  }}
+                  placeholder="Ex.: Minha chegada ao mundo"
+                />
+                <span style={styles.counter}>{title.trim().length}/200</span>
+              </label>
+
+              <label style={styles.label}>
+                <span style={styles.labelTop}>Descrição (uma frase)</span>
+                <input
+                  style={styles.input}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  onFocus={() => {
+                    if (!didFocusDesc.current) {
+                      didFocusDesc.current = true;
+                      if (selectedChapterId && description === DEFAULT_NEW_DESCRIPTION) setDescription("");
+                    }
+                  }}
+                  placeholder={DEFAULT_NEW_DESCRIPTION}
+                />
+                <span style={styles.counter}>{description.trim().length}/400</span>
+              </label>
+
+              <label style={styles.label}>
+                <span style={styles.labelTop}>Texto do capítulo</span>
+                <textarea
+                  style={styles.textarea}
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder="Escreva aqui…"
+                />
+                <span style={styles.counter}>{(body || "").length} caracteres</span>
+              </label>
+
+              <div style={styles.noteMuted}>
+                Nota: esta tela é “camada narrativa” determinística. Integração com IA/geração entra depois, sem mexer no core.
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       <div style={styles.suggestCard}>
         <div style={styles.suggestTitle}>
-          Próximo capítulo sugerido: <b>Capítulo {headerCount + 1}</b> — Infância (primeiras memórias)
+          Guia de escrita (opcional) — <b>{selectedTitlePreview}</b>
         </div>
         <ul style={styles.suggestList}>
-          <li>Qual foi a primeira casa / bairro que você lembra?</li>
-          <li>Quem eram as pessoas mais presentes (pais, avós, vizinhos)?</li>
-          <li>Qual era um ritual da sua família (almoço, domingo, religião, música)?</li>
-          <li>Gancho do que você escreveu: {body ? `${body.slice(0, 40)}…` : "(ainda vazio)"}</li>
+          <li>Qual cenário define essa fase (casa, cidade, rotina, clima, época)?</li>
+          <li>Quem são as pessoas centrais aqui? O que elas significam para você?</li>
+          <li>Qual foi a virada (o antes e o depois)?</li>
+          <li>Gancho do seu texto: {body ? `${compactText(body, 48)}` : "(ainda vazio)"}</li>
         </ul>
         <div style={styles.suggestHint}>*isso é só guia premium de escrita (determinístico)*</div>
       </div>
@@ -791,7 +874,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   headerRow: { display: "flex", gap: 12, alignItems: "flex-start", justifyContent: "space-between" },
   h1: { fontSize: 34, fontWeight: 800, letterSpacing: -0.5, marginBottom: 4 },
-  sub: { opacity: 0.75, fontSize: 13 },
+  sub: { opacity: 0.78, fontSize: 13, lineHeight: 1.35 },
   headerActions: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
   pill: {
     background: "var(--hdud-surface-2)",
@@ -800,6 +883,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 999,
     fontSize: 12,
     opacity: 0.9,
+    fontWeight: 800,
   },
   btn: {
     border: "1px solid var(--hdud-border)",
@@ -820,8 +904,31 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
   },
   btnDisabled: { opacity: 0.55, cursor: "not-allowed" },
-  headerMeta: { marginTop: 8 },
+
+  headerMeta: { marginTop: 10 },
+  metaRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" },
   smallMuted: { fontSize: 12, opacity: 0.7 },
+
+  diagToggle: {
+    border: "1px solid var(--hdud-border)",
+    background: "transparent",
+    color: "var(--hdud-text)",
+    padding: "6px 10px",
+    borderRadius: 999,
+    cursor: "pointer",
+    fontWeight: 800,
+    fontSize: 12,
+    opacity: 0.75,
+  },
+  diagBox: {
+    marginTop: 10,
+    border: "1px dashed var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    borderRadius: 12,
+    padding: 10,
+  },
+  diagLine: { fontSize: 12, opacity: 0.85 },
+  diagHint: { marginTop: 6, fontSize: 11, opacity: 0.6 },
 
   toast: { marginTop: 10, padding: 10, borderRadius: 10, fontWeight: 700, fontSize: 13 },
   toastOk: { background: "rgba(0,200,120,0.15)", border: "1px solid rgba(0,200,120,0.25)" },
@@ -837,17 +944,51 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "var(--hdud-shadow)",
     border: "1px solid var(--hdud-border)",
   },
-  listHeader: { display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 },
+  listHeader: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 10,
+  },
   cardTitle: { fontWeight: 900, fontSize: 14 },
   cardMeta: { fontSize: 12, opacity: 0.7 },
+  cardMetaRight: { display: "flex", alignItems: "center", gap: 10 },
+
+  searchRow: { display: "flex", gap: 8, marginBottom: 10 },
+  searchInput: {
+    flex: 1,
+    border: "1px solid var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    color: "var(--hdud-text)",
+    borderRadius: 10,
+    padding: "9px 10px",
+    fontSize: 13,
+    outline: "none",
+  },
+  searchClear: {
+    border: "1px solid var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    color: "var(--hdud-text)",
+    borderRadius: 10,
+    padding: "9px 10px",
+    fontSize: 13,
+    cursor: "pointer",
+    fontWeight: 800,
+    opacity: 0.9,
+  },
 
   emptyBox: {
     border: "1px dashed var(--hdud-border)",
     borderRadius: 12,
     padding: 14,
-    opacity: 0.9,
+    opacity: 0.95,
     fontSize: 13,
+    lineHeight: 1.35,
   },
+  emptyTitle: { fontWeight: 900, marginBottom: 6, fontSize: 13 },
+  emptyText: { opacity: 0.85 },
+
   listWrap: { display: "flex", flexDirection: "column", gap: 10 },
 
   itemBtn: {
@@ -861,8 +1002,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   itemBtnActive: { outline: "2px solid var(--hdud-accent-border)" },
   itemTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  itemTitle: { fontSize: 13, fontWeight: 800 },
-  itemDesc: { marginTop: 6, fontSize: 12, opacity: 0.78 },
+  itemTitle: { fontSize: 13, fontWeight: 900, display: "flex", alignItems: "center", gap: 8 },
+  itemId: { fontSize: 11, opacity: 0.65, fontWeight: 900 },
+  itemDesc: { marginTop: 6, fontSize: 12, opacity: 0.78, lineHeight: 1.3 },
   itemMeta: { marginTop: 8, fontSize: 11, opacity: 0.65 },
 
   badge: {
@@ -872,6 +1014,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 999,
     border: "1px solid var(--hdud-border)",
     color: "var(--hdud-text)",
+    whiteSpace: "nowrap",
   },
   badgeDraft: { background: "rgba(255,180,0,0.15)" },
   badgePublic: { background: "rgba(0,200,120,0.15)" },
@@ -891,6 +1034,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 14,
     boxShadow: "var(--hdud-shadow)",
     border: "1px solid var(--hdud-border)",
+    minHeight: 420,
   },
   editorHeader: {
     display: "grid",
@@ -901,6 +1045,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
   editorBadges: { display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" },
   editorActions: { display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" },
+
+  rightEmpty: {
+    border: "1px dashed var(--hdud-border)",
+    borderRadius: 12,
+    padding: 18,
+    opacity: 0.95,
+  },
+  rightEmptyTitle: { fontWeight: 900, marginBottom: 6, fontSize: 13 },
+  rightEmptyText: { fontSize: 12, opacity: 0.78, lineHeight: 1.35 },
 
   form: { marginTop: 10, display: "flex", flexDirection: "column", gap: 12 },
   label: { display: "flex", flexDirection: "column", gap: 6 },
@@ -923,19 +1076,11 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px 12px",
     fontSize: 13,
     outline: "none",
-    minHeight: 180,
+    minHeight: 200,
     resize: "vertical",
   },
   counter: { fontSize: 11, opacity: 0.65 },
 
-  note: {
-    background: "var(--hdud-surface-2)",
-    border: "1px solid var(--hdud-border)",
-    borderRadius: 10,
-    padding: 10,
-    fontSize: 12,
-    opacity: 0.9,
-  },
   noteMuted: { fontSize: 11, opacity: 0.62, marginTop: 2 },
 
   suggestCard: {
@@ -947,6 +1092,6 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid var(--hdud-border)",
   },
   suggestTitle: { fontSize: 13, fontWeight: 900, marginBottom: 8 },
-  suggestList: { margin: 0, paddingLeft: 18, fontSize: 12, opacity: 0.85 },
+  suggestList: { margin: 0, paddingLeft: 18, fontSize: 12, opacity: 0.85, lineHeight: 1.35 },
   suggestHint: { marginTop: 8, fontSize: 11, opacity: 0.62 },
 };

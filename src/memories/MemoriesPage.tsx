@@ -324,56 +324,61 @@ export default function MemoriesPage(props: {
   const countLabel = useMemo(() => `${items.length} item(ns)`, [items.length]);
 
   // =========================
-  // UI — padrão dark premium
-  // (somente estética)
+  // UI — padrão claro (AppShell/Capítulos)
   // =========================
   const ui = useMemo(() => {
     const page: React.CSSProperties = {
-      padding: 24,
-      color: "inherit",
+      padding: 18,
+      color: "var(--hdud-text)",
     };
 
     const container: React.CSSProperties = {
-      maxWidth: 1040,
+      maxWidth: 1100,
       margin: "0 auto",
+    };
+
+    const headerCard: React.CSSProperties = {
+      background: "var(--hdud-card)",
+      borderRadius: 14,
+      padding: 18,
+      boxShadow: "var(--hdud-shadow)",
+      marginBottom: 18,
+      border: "1px solid var(--hdud-border)",
     };
 
     const breadcrumb: React.CSSProperties = {
       fontSize: 12,
-      opacity: 0.75,
+      opacity: 0.7,
       marginBottom: 8,
-      letterSpacing: 0.2,
     };
 
     const h1: React.CSSProperties = {
-      fontSize: 44,
+      fontSize: 40,
       fontWeight: 900,
       letterSpacing: -0.6,
       margin: "0 0 6px 0",
     };
 
     const subtitle: React.CSSProperties = {
-      opacity: 0.7,
+      opacity: 0.78,
       marginTop: 0,
-      fontSize: 14,
+      fontSize: 13,
       lineHeight: 1.35,
     };
 
     const grid: React.CSSProperties = {
       display: "grid",
       gridTemplateColumns: "1fr 1fr",
-      gap: 16,
+      gap: 18,
       alignItems: "start",
-      marginTop: 18,
     };
 
     const card: React.CSSProperties = {
-      borderRadius: 16,
-      padding: 16,
-      border: "1px solid rgba(255,255,255,0.08)",
-      background: "rgba(17, 24, 39, 0.55)",
-      boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
-      backdropFilter: "blur(8px)",
+      background: "var(--hdud-card)",
+      borderRadius: 14,
+      padding: 14,
+      boxShadow: "var(--hdud-shadow)",
+      border: "1px solid var(--hdud-border)",
     };
 
     const cardHeaderRow: React.CSSProperties = {
@@ -384,83 +389,88 @@ export default function MemoriesPage(props: {
     };
 
     const cardTitle: React.CSSProperties = {
-      fontSize: 18,
-      fontWeight: 800,
+      fontSize: 14,
+      fontWeight: 900,
       marginBottom: 2,
     };
 
     const cardDesc: React.CSSProperties = {
       opacity: 0.7,
       marginTop: 4,
-      fontSize: 13,
+      fontSize: 12,
       lineHeight: 1.35,
     };
 
     const pill: React.CSSProperties = {
-      border: "1px solid rgba(255,255,255,0.14)",
+      border: "1px solid var(--hdud-border)",
       padding: "4px 10px",
       borderRadius: 999,
       fontSize: 12,
-      opacity: 0.9,
+      opacity: 0.85,
       whiteSpace: "nowrap",
-      background: "rgba(255,255,255,0.04)",
+      background: "var(--hdud-surface-2)",
+      fontWeight: 800,
     };
 
     const label: React.CSSProperties = {
       fontSize: 12,
-      fontWeight: 700,
+      fontWeight: 900,
       opacity: 0.85,
       marginBottom: 6,
     };
 
     const input: React.CSSProperties = {
       width: "100%",
-      borderRadius: 12,
+      borderRadius: 10,
       padding: "10px 12px",
-      border: "1px solid rgba(255,255,255,0.14)",
+      border: "1px solid var(--hdud-border)",
       outline: "none",
-      background: "rgba(0,0,0,0.22)",
-      color: "inherit",
+      background: "var(--hdud-surface-2)",
+      color: "var(--hdud-text)",
+      fontSize: 13,
     };
 
     const textarea: React.CSSProperties = {
       width: "100%",
-      borderRadius: 12,
+      borderRadius: 10,
       padding: "10px 12px",
-      border: "1px solid rgba(255,255,255,0.14)",
+      border: "1px solid var(--hdud-border)",
       outline: "none",
       resize: "vertical",
-      background: "rgba(0,0,0,0.22)",
-      color: "inherit",
+      background: "var(--hdud-surface-2)",
+      color: "var(--hdud-text)",
+      fontSize: 13,
     };
 
-    const softButton: React.CSSProperties = {
-      borderRadius: 999,
-      padding: "8px 14px",
-      border: "1px solid rgba(255,255,255,0.16)",
-      background: "rgba(255,255,255,0.06)",
-      color: "inherit",
-      cursor: "pointer",
-      fontWeight: 700,
-    };
-
-    const primaryButton: React.CSSProperties = {
-      borderRadius: 999,
-      padding: "8px 14px",
-      border: "1px solid rgba(255,255,255,0.18)",
-      background: "rgba(255,255,255,0.92)",
-      color: "#0b1020",
+    const btn: React.CSSProperties = {
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-surface-2)",
+      color: "var(--hdud-text)",
+      padding: "8px 12px",
+      borderRadius: 10,
       cursor: "pointer",
       fontWeight: 800,
+      fontSize: 13,
+    };
+
+    const btnPrimary: React.CSSProperties = {
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-primary-bg)",
+      color: "var(--hdud-primary-text)",
+      padding: "8px 12px",
+      borderRadius: 10,
+      cursor: "pointer",
+      fontWeight: 900,
+      fontSize: 13,
     };
 
     const dangerBox: React.CSSProperties = {
       marginTop: 12,
       padding: 10,
       borderRadius: 12,
-      border: "1px solid rgba(239,68,68,0.35)",
-      background: "rgba(239,68,68,0.10)",
-      color: "rgba(255,255,255,0.92)",
+      border: "1px solid rgba(255,0,80,0.22)",
+      background: "rgba(255,0,80,0.10)",
+      color: "var(--hdud-text)",
       fontSize: 13,
       whiteSpace: "pre-wrap",
     };
@@ -473,14 +483,15 @@ export default function MemoriesPage(props: {
     };
 
     const listItem: React.CSSProperties = {
-      borderRadius: 14,
+      borderRadius: 12,
       padding: 12,
-      border: "1px solid rgba(255,255,255,0.10)",
-      background: "rgba(0,0,0,0.22)",
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-surface-2)",
       cursor: "pointer",
+      textAlign: "left",
     };
 
-    // ✅ Preview compacto por linhas (2–3), sem “textão” na listagem
+    // ✅ Preview compacto por linhas (3), legível (sem opacity “apagando”)
     const previewClamp: React.CSSProperties = {
       marginTop: 8,
       opacity: 0.88,
@@ -490,7 +501,6 @@ export default function MemoriesPage(props: {
       display: "-webkit-box",
       WebkitBoxOrient: "vertical" as any,
       WebkitLineClamp: 3 as any,
-      // fallback suave se o clamp não aplicar
       maxHeight: 13 * 1.4 * 3 + 2,
       whiteSpace: "pre-wrap",
       wordBreak: "break-word",
@@ -518,9 +528,22 @@ export default function MemoriesPage(props: {
       justifyContent: "flex-end",
     };
 
+    const muted: React.CSSProperties = { fontSize: 12, opacity: 0.7, marginTop: 10 };
+
+    const codeInline: React.CSSProperties = {
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      fontSize: 12,
+      opacity: 0.9,
+      background: "var(--hdud-surface-2)",
+      border: "1px solid var(--hdud-border)",
+      padding: "2px 6px",
+      borderRadius: 8,
+    };
+
     return {
       page,
       container,
+      headerCard,
       breadcrumb,
       h1,
       subtitle,
@@ -533,8 +556,8 @@ export default function MemoriesPage(props: {
       label,
       input,
       textarea,
-      softButton,
-      primaryButton,
+      btn,
+      btnPrimary,
       dangerBox,
       listWrap,
       listItem,
@@ -542,18 +565,24 @@ export default function MemoriesPage(props: {
       footerHint,
       splitRow,
       rightActions,
+      muted,
+      codeInline,
     };
   }, []);
 
   return (
     <div style={ui.page}>
       <div style={ui.container}>
-        <div style={ui.breadcrumb}>Memórias • AppShell mínimo (vNext)</div>
+        <div style={ui.headerCard}>
+          <div style={ui.breadcrumb}>Memórias • AppShell mínimo (vNext)</div>
 
-        <div style={{ marginBottom: 10 }}>
-          <h1 style={ui.h1}>Minhas Memórias</h1>
-          <div style={ui.subtitle}>
-            Demo v0.1 — listagem preferencial via <code>/api/timeline</code> (fonte: <code>source=memories</code>).
+          <div style={{ marginBottom: 2 }}>
+            <h1 style={ui.h1}>Minhas Memórias</h1>
+            <div style={ui.subtitle}>
+              Demo v0.1 — listagem preferencial via{" "}
+              <span style={ui.codeInline}>/api/timeline</span> (fonte:{" "}
+              <span style={ui.codeInline}>source=memories</span>).
+            </div>
           </div>
         </div>
 
@@ -601,7 +630,7 @@ export default function MemoriesPage(props: {
                 onClick={load}
                 disabled={loading}
                 style={{
-                  ...ui.softButton,
+                  ...ui.btn,
                   cursor: loading ? "not-allowed" : "pointer",
                   opacity: loading ? 0.7 : 1,
                 }}
@@ -616,7 +645,7 @@ export default function MemoriesPage(props: {
                     setContent("");
                     setError(null);
                   }}
-                  style={ui.softButton}
+                  style={ui.btn}
                 >
                   Limpar
                 </button>
@@ -625,7 +654,7 @@ export default function MemoriesPage(props: {
                   onClick={create}
                   disabled={creating}
                   style={{
-                    ...ui.primaryButton,
+                    ...ui.btnPrimary,
                     cursor: creating ? "not-allowed" : "pointer",
                     opacity: creating ? 0.75 : 1,
                   }}
@@ -635,7 +664,7 @@ export default function MemoriesPage(props: {
               </div>
             </div>
 
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
+            <div style={ui.muted}>
               Author: {authorId ?? "—"} &nbsp;&nbsp;•&nbsp;&nbsp; HDUD • MVP v0.1 • 2026
             </div>
           </div>
@@ -648,7 +677,8 @@ export default function MemoriesPage(props: {
                 <div style={ui.cardDesc}>
                   Clique em um card para abrir detalhes e versões.
                   <div style={{ marginTop: 6, opacity: 0.75 }}>
-                    UI usa <code>meta.can_edit</code> e <code>meta.current_version</code>.
+                    UI usa <span style={ui.codeInline}>meta.can_edit</span> e{" "}
+                    <span style={ui.codeInline}>meta.current_version</span>.
                   </div>
                 </div>
               </div>
@@ -657,7 +687,7 @@ export default function MemoriesPage(props: {
                 onClick={load}
                 disabled={loading}
                 style={{
-                  ...ui.softButton,
+                  ...ui.btn,
                   cursor: loading ? "not-allowed" : "pointer",
                   opacity: loading ? 0.7 : 1,
                 }}
@@ -694,7 +724,7 @@ export default function MemoriesPage(props: {
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                       <div style={{ fontWeight: 900 }}>
                         {header}
-                        <span style={{ marginLeft: 10, opacity: 0.7, fontWeight: 700, fontSize: 12 }}>
+                        <span style={{ marginLeft: 10, opacity: 0.7, fontWeight: 800, fontSize: 12 }}>
                           #{m.memory_id} • v{v}
                           {typeof canEdit === "boolean" && (
                             <span style={{ marginLeft: 8, opacity: 0.85 }}>
