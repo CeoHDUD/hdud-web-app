@@ -1,4 +1,3 @@
-// C:\HDUD_DATA\hdud-web-app\src\pages\ChaptersPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
@@ -11,6 +10,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - Home mental: Capítulos são o “mapa” (fases/estrutura). Ação principal: entrar/editar um capítulo.
  * - Memórias/Core NÃO entram aqui (somente camada narrativa do capítulo).
  * - UI mais “lugar / livro”, menos “dashboard”.
+ *
+ * ✅ Deep-link da Timeline:
+ * - Se existir sessionStorage.hdud_open_chapter_id, abre automaticamente esse capítulo ao entrar.
  */
 
 type ChapterStatus = "DRAFT" | "PUBLIC";
@@ -176,6 +178,21 @@ function compactText(v: string, max = 120) {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
+// =======================
+// Deep-link helper
+// =======================
+function consumeOpenChapterHint(): number | null {
+  try {
+    const v = sessionStorage.getItem("hdud_open_chapter_id");
+    if (!v) return null;
+    sessionStorage.removeItem("hdud_open_chapter_id");
+    const n = Number(String(v).trim());
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function ChaptersPage() {
   const token = useMemo(() => getToken(), []);
   const canUseApi = !!token;
@@ -219,6 +236,9 @@ export default function ChaptersPage() {
   // ✅ controle: só limpa template no 1º foco (evita “não limpa quando digito”)
   const didFocusTitle = useRef(false);
   const didFocusDesc = useRef(false);
+
+  // ✅ deep-link: capítulo a abrir automaticamente (vem da Timeline)
+  const pendingOpenChapterIdRef = useRef<number | null>(consumeOpenChapterHint());
 
   function setToastAuto(t: Toast | null, ms = 3500) {
     setToast(t);
@@ -296,6 +316,21 @@ export default function ChaptersPage() {
 
     setItems(normalized);
 
+    // ✅ prioridade: se veio deep-link da Timeline, abre esse capítulo
+    const pending = pendingOpenChapterIdRef.current;
+    if (pending) {
+      const exists = normalized.some((c) => c.chapter_id === pending);
+      if (exists) {
+        pendingOpenChapterIdRef.current = null;
+        await loadDetail(pending);
+        return;
+      } else {
+        // se não existir, seguimos fallback normal
+        pendingOpenChapterIdRef.current = null;
+      }
+    }
+
+    // fallback: se nada selecionado ainda, abre o primeiro
     if (!selectedChapterId && normalized.length > 0) {
       void loadDetail(normalized[0].chapter_id);
     }

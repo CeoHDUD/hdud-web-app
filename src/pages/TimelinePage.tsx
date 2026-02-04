@@ -1,6 +1,5 @@
-// C:\HDUD_DATA\hdud-web-app\src\pages\TimelinePage.tsx
-
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 type TimelineKind = "Memória" | "Capítulo" | "Versão" | "Rollback" | "Evento";
 
@@ -56,10 +55,11 @@ function tryExtractTokenFromValue(v: string): string | null {
 function getAuthToken(): string | null {
   // chaves conhecidas + comuns em apps
   const candidates = [
+    "hdud_access_token",
+    "HDUD_TOKEN",
     "access_token",
     "token",
     "hdud_token",
-    "HDUD_TOKEN",
     "auth_token",
     "jwt",
     "id_token",
@@ -166,6 +166,18 @@ function formatTimeLabel(d: Date): string {
   return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 }
 
+function formatRelative(d: Date): string {
+  const diffMs = Date.now() - d.getTime();
+  const s = Math.max(0, Math.floor(diffMs / 1000));
+  if (s < 60) return `há ${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `há ${m}min`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `há ${h}h`;
+  const days = Math.floor(h / 24);
+  return `há ${days}d`;
+}
+
 function sortEventsDesc(a: TimelineEvent, b: TimelineEvent) {
   const da = safeDateParse(a.at)?.getTime() ?? -Infinity;
   const db = safeDateParse(b.at)?.getTime() ?? -Infinity;
@@ -178,45 +190,49 @@ function clampText(s: string, max = 160) {
   return t.slice(0, max - 1) + "…";
 }
 
-function KindPill({ kind }: { kind: TimelineKind }) {
-  // sem “inventar paleta”: só hierarquia/forma
-  return (
-    <span className="inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium opacity-90">
-      {kind}
-    </span>
-  );
+function kindIcon(kind: TimelineKind): string {
+  if (kind === "Memória") return "🧠";
+  if (kind === "Capítulo") return "📚";
+  if (kind === "Versão") return "🧾";
+  if (kind === "Rollback") return "⏪";
+  return "•";
 }
 
-function ChipButton({
-  active,
-  children,
-  onClick,
-}: {
-  active: boolean;
-  children: React.ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition",
-        active
-          ? "font-semibold opacity-100 shadow-sm"
-          : "opacity-70 hover:opacity-90",
-      ].join(" ")}
-      aria-pressed={active}
-    >
-      {children}
-    </button>
-  );
+// =====================
+// Routing helpers (click to open)
+// =====================
+function extractIdFromTimelineKey(id: string): { kind: "memory" | "chapter" | "unknown"; id: number | null } {
+  const s = String(id || "").trim();
+
+  const m1 = s.match(/^memory:(\d+)$/i);
+  if (m1) return { kind: "memory", id: Number(m1[1]) };
+
+  const c1 = s.match(/^chapter:(\d+)$/i);
+  if (c1) return { kind: "chapter", id: Number(c1[1]) };
+
+  return { kind: "unknown", id: null };
+}
+
+function extractTarget(ev: TimelineEvent): { kind: "memory" | "chapter" | "unknown"; id: number | null } {
+  const byKey = extractIdFromTimelineKey(ev.id);
+  if (byKey.id) return byKey;
+
+  const raw = ev.raw || {};
+  const mid = raw?.memory_id ?? raw?.memoryId ?? raw?.id_memory ?? null;
+  if (typeof mid === "number" && Number.isFinite(mid)) return { kind: "memory", id: mid };
+
+  const cid = raw?.chapter_id ?? raw?.chapterId ?? raw?.id_chapter ?? null;
+  if (typeof cid === "number" && Number.isFinite(cid)) return { kind: "chapter", id: cid };
+
+  return { kind: "unknown", id: null };
 }
 
 // =====================
 // Page
 // =====================
 export default function TimelinePage() {
+  const navigate = useNavigate();
+
   const filters: FilterKey[] = ["Tudo", "Memórias", "Capítulos", "Versões", "Rollbacks"];
 
   const [activeFilter, setActiveFilter] = useState<FilterKey>("Tudo");
@@ -226,7 +242,9 @@ export default function TimelinePage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // debug/telemetria leve (pra nunca ficar no escuro)
+  const [query, setQuery] = useState("");
+
+  // debug/telemetria leve
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugInfo, setDebugInfo] = useState<{
     usedUrl: string;
@@ -239,6 +257,43 @@ export default function TimelinePage() {
     httpStatus: null,
     tokenPresent: Boolean(getAuthToken()),
   });
+
+  // open/collapse details por id
+  const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
+
+  // evita double-click spam
+  const clickLockRef = useRef(false);
+
+  function toggleOpen(id: string) {
+    setOpenMap((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  function openEvent(ev: TimelineEvent) {
+    const t = extractTarget(ev);
+
+    // trava rápida pra evitar navegação duplicada
+    if (clickLockRef.current) return;
+    clickLockRef.current = true;
+    setTimeout(() => (clickLockRef.current = false), 350);
+
+    if (t.kind === "memory" && t.id) {
+      navigate(`/memories/${t.id}`);
+      return;
+    }
+
+    if (t.kind === "chapter" && t.id) {
+      try {
+        sessionStorage.setItem("hdud_open_chapter_id", String(t.id));
+      } catch {
+        // ignore
+      }
+      navigate(`/chapters`);
+      return;
+    }
+
+    // fallback: abre detalhes
+    toggleOpen(ev.id);
+  }
 
   async function load() {
     setLoading(true);
@@ -297,15 +352,6 @@ export default function TimelinePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const filteredEvents = useMemo(() => {
-    if (activeFilter === "Tudo") return events;
-    if (activeFilter === "Memórias") return events.filter((e) => e.kind === "Memória");
-    if (activeFilter === "Capítulos") return events.filter((e) => e.kind === "Capítulo");
-    if (activeFilter === "Versões") return events.filter((e) => e.kind === "Versão");
-    if (activeFilter === "Rollbacks") return events.filter((e) => e.kind === "Rollback");
-    return events;
-  }, [events, activeFilter]);
-
   const counts = useMemo(() => {
     return {
       Tudo: events.length,
@@ -315,6 +361,33 @@ export default function TimelinePage() {
       Rollbacks: events.filter((e) => e.kind === "Rollback").length,
     };
   }, [events]);
+
+  const filteredEvents = useMemo(() => {
+    let list = events;
+
+    if (activeFilter === "Memórias") list = list.filter((e) => e.kind === "Memória");
+    if (activeFilter === "Capítulos") list = list.filter((e) => e.kind === "Capítulo");
+    if (activeFilter === "Versões") list = list.filter((e) => e.kind === "Versão");
+    if (activeFilter === "Rollbacks") list = list.filter((e) => e.kind === "Rollback");
+
+    const q = query.trim().toLowerCase();
+    if (!q) return list;
+
+    return list.filter((e) => {
+      const hay = [
+        e.title,
+        e.note,
+        e.id,
+        e.kind,
+        e.source,
+        JSON.stringify(e.raw || {}),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [events, activeFilter, query]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, TimelineEvent[]>();
@@ -345,88 +418,69 @@ export default function TimelinePage() {
     return "Ativo";
   }, [loading, errorMsg]);
 
-  const tokenBadge = useMemo(() => {
-    const ok = debugInfo.tokenPresent;
-    return (
-      <span className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium opacity-90">
-        <span className="inline-block h-2 w-2 rounded-full border" aria-hidden="true" />
-        Token: {ok ? "detectado" : "ausente"}
-      </span>
-    );
-  }, [debugInfo.tokenPresent]);
-
   return (
-    <div className="hdud-page space-y-4">
-      {/* Hero / Header */}
-      <div className="hdud-card">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
-            <h1 className="hdud-title">Timeline</h1>
-            <p className="hdud-subtitle">
-              Uma linha do tempo única do que aconteceu na sua história — memórias, capítulos e (em breve) versões, diffs e rollbacks —
+    <div style={styles.page}>
+      {/* Header */}
+      <div style={styles.card}>
+        <div style={styles.headerRow}>
+          <div style={{ minWidth: 0 }}>
+            <div style={styles.h1}>Timeline</div>
+            <div style={styles.sub}>
+              Uma linha do tempo única do que aconteceu na sua história — memórias, capítulos e (em breve) versões/diffs/rollbacks —
               consumindo apenas o core (<code>/timeline</code>).
-            </p>
+            </div>
 
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center rounded-full border px-3 py-1 text-xs opacity-80">
-                Status: <span className="ml-1 font-medium opacity-100">{statusLine}</span>
+            <div style={styles.badgeRow}>
+              <span style={styles.badgeSoft}>
+                Status: <b style={{ opacity: 1 }}>{statusLine}</b>
                 {lastUpdated && !loading && !errorMsg ? (
-                  <span className="ml-2 opacity-80">
+                  <span style={{ opacity: 0.75 }}>
+                    {" "}
                     • Atualizado:{" "}
-                    <span className="font-medium">
-                      {lastUpdated.toLocaleTimeString("pt-BR", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
+                    <b>
+                      {lastUpdated.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                    </b>
                   </span>
                 ) : null}
               </span>
 
-              {tokenBadge}
+              <span style={styles.badgeSoft}>
+                Token: <b>{debugInfo.tokenPresent ? "detectado" : "ausente"}</b>
+              </span>
 
               <button
                 type="button"
+                style={styles.btnGhost}
                 onClick={() => setDebugOpen((v) => !v)}
-                className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium opacity-80 hover:opacity-100"
               >
                 {debugOpen ? "Ocultar diagnóstico" : "Diagnóstico"}
               </button>
             </div>
 
             {debugOpen && (
-              <div className="mt-3 rounded-lg border px-4 py-3 text-xs opacity-80">
-                <div className="font-semibold opacity-90">Diagnóstico rápido</div>
-                <div className="mt-2 space-y-1">
-                  <div>
-                    • Endpoint: <span className="font-medium">{debugInfo.usedUrl}</span>
-                  </div>
-                  <div>
-                    • Authorization enviado:{" "}
-                    <span className="font-medium">{debugInfo.authSent ? "sim" : "não"}</span>
-                  </div>
-                  <div>
-                    • HTTP:{" "}
-                    <span className="font-medium">
-                      {debugInfo.httpStatus === null ? "—" : debugInfo.httpStatus}
-                    </span>
-                  </div>
-                  <div className="mt-2 opacity-70">
-                    Se o token estiver ausente, a Timeline pode voltar vazia ou sem acesso dependendo do core.
-                  </div>
+              <div style={styles.diagBox}>
+                <div style={styles.diagLine}>
+                  <b>Endpoint</b>: {debugInfo.usedUrl}
+                </div>
+                <div style={styles.diagLine}>
+                  <b>Authorization enviado</b>: {debugInfo.authSent ? "sim" : "não"}
+                </div>
+                <div style={styles.diagLine}>
+                  <b>HTTP</b>: {debugInfo.httpStatus == null ? "—" : debugInfo.httpStatus}
+                </div>
+                <div style={styles.diagHint}>
+                  Se o token estiver ausente, a Timeline pode voltar vazia ou sem acesso dependendo do core.
                 </div>
               </div>
             )}
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div style={styles.headerActions}>
             <button
               type="button"
+              style={{ ...styles.btn, ...(loading ? styles.btnDisabled : {}) }}
               onClick={load}
-              className="inline-flex items-center rounded-md border px-3 py-2 text-sm font-semibold opacity-90 hover:opacity-100 shadow-sm"
               disabled={loading}
-              aria-disabled={loading}
-              title="Recarregar timeline"
             >
               {loading ? "Atualizando…" : "Atualizar"}
             </button>
@@ -434,25 +488,23 @@ export default function TimelinePage() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="hdud-card">
-        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+      {/* Filters + Search */}
+      <div style={styles.card}>
+        <div style={styles.rowBetween}>
           <div>
-            <div className="text-lg font-semibold">Filtros</div>
-            <div className="text-sm opacity-80">
-              Visualize por tipo mantendo a timeline <span className="font-medium">unificada</span> e <span className="font-medium">cronológica</span>.
+            <div style={styles.cardTitle}>Filtros</div>
+            <div style={styles.cardMeta}>
+              Visualize por tipo mantendo a timeline <b>unificada</b> e <b>clicável</b>.
             </div>
           </div>
 
-          <div className="text-xs opacity-70 md:text-right">
-            <div className="inline-flex items-center rounded-full border px-3 py-1">
-              Itens: <span className="ml-1 font-medium">{events.length}</span>
-            </div>
+          <div style={styles.smallMuted}>
+            Itens: <b>{filteredEvents.length}</b> / {events.length}
           </div>
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          {filters.map((f) => {
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+          {(["Tudo", "Memórias", "Capítulos", "Versões", "Rollbacks"] as FilterKey[]).map((f) => {
             const isActive = f === activeFilter;
             const count =
               f === "Tudo"
@@ -466,140 +518,428 @@ export default function TimelinePage() {
                       : counts.Rollbacks;
 
             return (
-              <ChipButton key={f} active={isActive} onClick={() => setActiveFilter(f)}>
-                <span>{f}</span>
-                <span className="inline-flex min-w-[30px] justify-center rounded-full border px-2 py-0.5 text-xs opacity-80">
-                  {count}
-                </span>
-              </ChipButton>
+              <button
+                key={f}
+                type="button"
+                style={{
+                  ...styles.chip,
+                  ...(isActive ? styles.chipActive : {}),
+                }}
+                onClick={() => setActiveFilter(f)}
+              >
+                {f}
+                <span style={styles.chipCount}>{count}</span>
+              </button>
             );
           })}
         </div>
 
+        <div style={styles.searchRow}>
+          <div style={{ flex: 1 }}>
+            <div style={styles.labelTop}>Buscar</div>
+            <input
+              style={styles.input}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Título, nota, id, fonte…"
+            />
+          </div>
+          <div style={styles.smallMuted}>
+            Dica: clique no card para abrir.
+          </div>
+        </div>
+
         {warnings.length > 0 && (
-          <div className="mt-4 rounded-lg border px-4 py-3 text-xs opacity-80">
-            <div className="font-semibold opacity-90">Avisos do agregador</div>
-            <div className="mt-2 space-y-1">
-              {warnings.slice(0, 8).map((w, i) => (
-                <div key={`warn-${i}`}>• {w}</div>
-              ))}
-            </div>
+          <div style={styles.warnBox}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Avisos do agregador</div>
+            {warnings.slice(0, 8).map((w, i) => (
+              <div key={`warn-${i}`}>• {w}</div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Events (Investor-grade: timeline vertical) */}
-      <div className="hdud-card">
-        <div className="flex items-start justify-between gap-3">
+      {/* Events */}
+      <div style={styles.card}>
+        <div style={styles.rowBetween}>
           <div>
-            <div className="text-lg font-semibold">Eventos</div>
-            <div className="text-sm opacity-80">
-              Do mais recente para o mais antigo, agrupados por dia (timeline viva).
-            </div>
+            <div style={styles.cardTitle}>Eventos</div>
+            <div style={styles.cardMeta}>Do mais recente para o mais antigo, agrupados por dia.</div>
           </div>
-          <div className="text-xs opacity-70">{loading ? "Carregando..." : "Ativo"}</div>
+          <div style={styles.smallMuted}>{loading ? "Carregando…" : "Ativo"}</div>
         </div>
 
-        {/* Error / Loading / Empty */}
         {errorMsg ? (
-          <div className="mt-4 rounded-xl border px-5 py-4">
-            <div className="text-sm font-semibold">Não foi possível carregar a Timeline</div>
-            <div className="mt-1 text-sm opacity-80">{errorMsg}</div>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={load}
-                className="inline-flex items-center rounded-md border px-3 py-2 text-sm font-semibold opacity-90 hover:opacity-100 shadow-sm"
-              >
-                Tentar novamente
-              </button>
-              <div className="text-xs opacity-70">
-                Dica: confirme que você está logado e que existe token no <code>localStorage</code>.
-              </div>
-            </div>
+          <div style={styles.errorBox}>
+            <div style={{ fontWeight: 900 }}>Não foi possível carregar a Timeline</div>
+            <div style={{ marginTop: 6, opacity: 0.85 }}>{errorMsg}</div>
+            <button type="button" style={{ ...styles.btn, marginTop: 12 }} onClick={load}>
+              Tentar novamente
+            </button>
           </div>
         ) : loading ? (
-          <div className="mt-4 rounded-xl border px-5 py-4 text-sm opacity-80">
-            Carregando eventos…
-          </div>
+          <div style={styles.infoBox}>Carregando eventos…</div>
         ) : filteredEvents.length === 0 ? (
-          <div className="mt-4 rounded-xl border px-5 py-4">
-            <div className="text-sm font-semibold">Nada para mostrar neste filtro</div>
-            <div className="mt-1 text-sm opacity-80">
-              Crie uma memória ou capítulo (ou ajuste o filtro) para a timeline ganhar vida.
+          <div style={styles.infoBox}>
+            <div style={{ fontWeight: 900 }}>Nada para mostrar</div>
+            <div style={{ marginTop: 6, opacity: 0.85 }}>
+              Ajuste filtro/busca, ou crie uma memória/capítulo para a timeline ganhar vida.
             </div>
           </div>
         ) : (
-          <div className="mt-5 space-y-8">
+          <div style={{ marginTop: 12 }}>
             {grouped.map((g) => (
-              <section key={g.day} className="space-y-4">
-                {/* Day Header */}
-                <div className="flex items-center gap-3">
-                  <div className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide opacity-85">
-                    {g.day}
-                  </div>
-                  <div className="h-px flex-1 border-t opacity-60" />
+              <section key={g.day} style={{ marginTop: 16 }}>
+                <div style={styles.dayHeader}>
+                  <span style={styles.dayPill}>{g.day}</span>
+                  <span style={styles.smallMuted}>{g.list.length} item(ns)</span>
                 </div>
 
-                {/* Timeline list */}
-                <div className="relative">
-                  <div className="absolute left-[14px] top-0 h-full border-l opacity-40" aria-hidden="true" />
+                <div style={styles.dayList}>
+                  {g.list.map((it) => {
+                    const dt = safeDateParse(it.at);
+                    const time = dt ? formatTimeLabel(dt) : it.at;
+                    const rel = dt ? formatRelative(dt) : "";
+                    const note = it.note ? clampText(it.note, 220) : "";
+                    const isOpen = Boolean(openMap[it.id]);
 
-                  <div className="space-y-3">
-                    {g.list.map((it) => {
-                      const dt = safeDateParse(it.at);
-                      const time = dt ? formatTimeLabel(dt) : it.at;
-                      const note = it.note ? clampText(it.note, 220) : "";
+                    const target = extractTarget(it);
+                    const canOpen =
+                      Boolean(target.id) && (target.kind === "memory" || target.kind === "chapter");
 
-                      return (
-                        <div key={it.id} className="relative pl-10">
-                          {/* dot */}
-                          <div
-                            className="absolute left-[9px] top-4 h-[12px] w-[12px] rounded-full border bg-white"
-                            aria-hidden="true"
-                          />
+                    const openLabel =
+                      target.kind === "memory"
+                        ? "Abrir memória"
+                        : target.kind === "chapter"
+                          ? "Abrir capítulo"
+                          : "Detalhes";
 
-                          <div className="rounded-xl border px-4 py-3 shadow-sm">
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="min-w-0">
-                                <div className="text-xs opacity-70">{time}</div>
-                                <div className="mt-0.5 text-base font-semibold leading-6">
-                                  {it.title}
-                                </div>
-                                {note ? (
-                                  <div className="mt-1 text-sm opacity-80">{note}</div>
-                                ) : null}
+                    return (
+                      <div
+                        key={it.id}
+                        style={styles.eventCard}
+                        onClick={() => openEvent(it)}
+                        title={canOpen ? "Clique para abrir" : "Clique para ver detalhes"}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") openEvent(it);
+                        }}
+                      >
+                        <div style={styles.eventTop}>
+                          <div style={styles.eventLeft}>
+                            <div style={styles.eventMetaRow}>
+                              <span style={styles.eventMeta}>
+                                {kindIcon(it.kind)} <b>{time}</b>{" "}
+                                {rel ? <span style={{ opacity: 0.7 }}>({rel})</span> : null}
+                              </span>
+                              <span style={styles.badgeSoftSmall}>
+                                Fonte: <b>{it.source || "unknown"}</b>
+                              </span>
+                              <span style={styles.badgeSoftSmall}>
+                                ID: <b>{it.id}</b>
+                              </span>
+                            </div>
 
-                                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs opacity-65">
-                                  <span className="inline-flex items-center rounded-full border px-2 py-0.5">
-                                    Fonte: {it.source || "unknown"}
-                                  </span>
-                                  <span className="inline-flex items-center rounded-full border px-2 py-0.5">
-                                    ID: {it.id}
-                                  </span>
-                                </div>
-                              </div>
+                            <div style={styles.eventTitle}>{it.title || "(sem título)"}</div>
 
-                              <div className="shrink-0 pt-1">
-                                <KindPill kind={it.kind} />
-                              </div>
+                            {note ? <div style={styles.eventNote}>{note}</div> : null}
+
+                            <div style={styles.eventActions}>
+                              <button
+                                type="button"
+                                style={styles.btnMiniPrimary}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openEvent(it);
+                                }}
+                              >
+                                {openLabel}
+                              </button>
+
+                              <button
+                                type="button"
+                                style={styles.btnMini}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleOpen(it.id);
+                                }}
+                              >
+                                {isOpen ? "Ocultar" : "Ver"} detalhes
+                              </button>
                             </div>
                           </div>
+
+                          <div style={styles.kindPill}>{it.kind}</div>
                         </div>
-                      );
-                    })}
-                  </div>
+
+                        {isOpen && (
+                          <div style={styles.detailsBox} onClick={(e) => e.stopPropagation()}>
+                            <div style={{ fontWeight: 900, marginBottom: 6 }}>Detalhes do evento</div>
+                            <div style={styles.smallMuted}>
+                              target: <b>{target.kind}:{target.id ?? "—"}</b>
+                            </div>
+                            <div style={{ marginTop: 8, opacity: 0.85 }}>
+                              <pre style={styles.pre}>{JSON.stringify(it.raw ?? null, null, 2)}</pre>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             ))}
           </div>
         )}
 
-        <div className="mt-5 rounded-lg border px-4 py-3 text-xs opacity-75">
-          Observação: esta tela <span className="font-semibold">apenas consome</span> o endpoint unificado{" "}
-          <code>/timeline</code>. Versões/diff/rollback entram quando o core expuser esses eventos.
+        <div style={styles.footerNote}>
+          Observação: esta tela <b>apenas consome</b> o endpoint unificado <code>/timeline</code>.
+          Versões/diff/rollback entram quando o core expuser esses eventos.
         </div>
       </div>
     </div>
   );
 }
+
+const styles: Record<string, React.CSSProperties> = {
+  page: { padding: 18, color: "var(--hdud-text)" },
+
+  card: {
+    background: "var(--hdud-card)",
+    borderRadius: 14,
+    padding: 16,
+    boxShadow: "var(--hdud-shadow)",
+    border: "1px solid var(--hdud-border)",
+    marginBottom: 14,
+  },
+
+  headerRow: { display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start" },
+  headerActions: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
+
+  h1: { fontSize: 28, fontWeight: 900, letterSpacing: -0.4, marginBottom: 6 },
+  sub: { opacity: 0.78, fontSize: 13, lineHeight: 1.35 },
+
+  badgeRow: { marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
+  badgeSoft: {
+    fontSize: 12,
+    fontWeight: 800,
+    padding: "6px 10px",
+    borderRadius: 999,
+    background: "var(--hdud-surface-2)",
+    border: "1px solid var(--hdud-border)",
+    color: "var(--hdud-text)",
+    opacity: 0.92,
+  },
+  badgeSoftSmall: {
+    fontSize: 11,
+    fontWeight: 800,
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: "var(--hdud-surface-2)",
+    border: "1px solid var(--hdud-border)",
+    color: "var(--hdud-text)",
+    opacity: 0.92,
+    whiteSpace: "nowrap",
+  },
+
+  btn: {
+    border: "1px solid var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    color: "var(--hdud-text)",
+    padding: "8px 12px",
+    borderRadius: 10,
+    cursor: "pointer",
+    fontWeight: 800,
+  },
+  btnDisabled: { opacity: 0.55, cursor: "not-allowed" },
+
+  btnGhost: {
+    border: "1px solid var(--hdud-border)",
+    background: "transparent",
+    color: "var(--hdud-text)",
+    padding: "6px 10px",
+    borderRadius: 999,
+    cursor: "pointer",
+    fontWeight: 800,
+    fontSize: 12,
+    opacity: 0.78,
+  },
+
+  diagBox: {
+    marginTop: 10,
+    border: "1px dashed var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    borderRadius: 12,
+    padding: 10,
+  },
+  diagLine: { fontSize: 12, opacity: 0.85, marginTop: 2 },
+  diagHint: { marginTop: 6, fontSize: 11, opacity: 0.62 },
+
+  rowBetween: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" },
+  cardTitle: { fontWeight: 900, fontSize: 14 },
+  cardMeta: { fontSize: 12, opacity: 0.72, marginTop: 4 },
+  smallMuted: { fontSize: 12, opacity: 0.7 },
+
+  chip: {
+    border: "1px solid var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    color: "var(--hdud-text)",
+    padding: "7px 10px",
+    borderRadius: 999,
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 12,
+    display: "inline-flex",
+    gap: 8,
+    alignItems: "center",
+    opacity: 0.82,
+  },
+  chipActive: { opacity: 1, outline: "2px solid var(--hdud-accent-border)" },
+  chipCount: {
+    fontSize: 11,
+    fontWeight: 900,
+    padding: "2px 8px",
+    borderRadius: 999,
+    border: "1px solid var(--hdud-border)",
+    background: "transparent",
+    opacity: 0.85,
+    minWidth: 28,
+    textAlign: "center",
+  },
+
+  searchRow: { display: "flex", gap: 12, marginTop: 12, alignItems: "flex-end", flexWrap: "wrap" },
+  labelTop: { fontSize: 12, fontWeight: 900, opacity: 0.85, marginBottom: 6 },
+  input: {
+    width: "100%",
+    border: "1px solid var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    color: "var(--hdud-text)",
+    borderRadius: 10,
+    padding: "10px 12px",
+    fontSize: 13,
+    outline: "none",
+  },
+
+  warnBox: {
+    marginTop: 12,
+    border: "1px dashed var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    borderRadius: 12,
+    padding: 10,
+    fontSize: 12,
+    opacity: 0.9,
+  },
+
+  errorBox: {
+    marginTop: 12,
+    border: "1px solid rgba(255,0,80,0.22)",
+    background: "rgba(255,0,80,0.10)",
+    borderRadius: 12,
+    padding: 14,
+  },
+  infoBox: {
+    marginTop: 12,
+    border: "1px dashed var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 12,
+    opacity: 0.92,
+  },
+
+  dayHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8 },
+  dayPill: {
+    fontSize: 11,
+    fontWeight: 900,
+    padding: "6px 10px",
+    borderRadius: 999,
+    border: "1px solid var(--hdud-border)",
+    background: "transparent",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    opacity: 0.85,
+  },
+
+  dayList: { display: "flex", flexDirection: "column", gap: 10 },
+
+  eventCard: {
+    border: "1px solid var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    borderRadius: 14,
+    padding: 12,
+    cursor: "pointer",
+    boxShadow: "var(--hdud-shadow-soft)",
+  },
+  eventTop: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" },
+  eventLeft: { minWidth: 0, flex: 1 },
+
+  eventMetaRow: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
+  eventMeta: { fontSize: 12, opacity: 0.8 },
+
+  eventTitle: { marginTop: 6, fontSize: 14, fontWeight: 900, lineHeight: 1.25 },
+  eventNote: { marginTop: 6, fontSize: 12, opacity: 0.82, lineHeight: 1.35 },
+
+  kindPill: {
+    fontSize: 11,
+    fontWeight: 900,
+    padding: "5px 10px",
+    borderRadius: 999,
+    border: "1px solid var(--hdud-border)",
+    background: "var(--hdud-card)",
+    whiteSpace: "nowrap",
+    opacity: 0.9,
+  },
+
+  eventActions: { marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" },
+  btnMiniPrimary: {
+    border: "1px solid var(--hdud-border)",
+    background: "var(--hdud-primary-bg)",
+    color: "var(--hdud-primary-text)",
+    padding: "7px 10px",
+    borderRadius: 10,
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 12,
+  },
+  btnMini: {
+    border: "1px solid var(--hdud-border)",
+    background: "transparent",
+    color: "var(--hdud-text)",
+    padding: "7px 10px",
+    borderRadius: 10,
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 12,
+    opacity: 0.85,
+  },
+
+  detailsBox: {
+    marginTop: 12,
+    border: "1px dashed var(--hdud-border)",
+    background: "var(--hdud-card)",
+    borderRadius: 12,
+    padding: 12,
+  },
+  pre: {
+    margin: 0,
+    border: "1px solid var(--hdud-border)",
+    borderRadius: 10,
+    padding: 10,
+    maxHeight: 240,
+    overflow: "auto",
+    fontSize: 11,
+    opacity: 0.92,
+    background: "var(--hdud-surface-2)",
+  },
+
+  footerNote: {
+    marginTop: 14,
+    border: "1px dashed var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    borderRadius: 12,
+    padding: 10,
+    fontSize: 12,
+    opacity: 0.75,
+  },
+};

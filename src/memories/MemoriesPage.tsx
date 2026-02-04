@@ -299,8 +299,8 @@ export default function MemoriesPage(props: {
 
     setCreating(true);
     try {
-      // Mantido (legado confirmado): POST /authors/:id/memories
-      await api("POST", `/authors/${authorId}/memories`, token, {
+      // ✅ Contrato estável (core): POST /memory
+      await api("POST", `/memory`, token, {
         author_id: authorId,
         title: title.trim() ? title.trim() : null,
         content: content,
