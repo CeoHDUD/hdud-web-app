@@ -1,3 +1,4 @@
+// C:\HDUD_DATA\hdud-web-app\src\pages\ChaptersPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
@@ -13,6 +14,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  *
  * ✅ Deep-link da Timeline:
  * - Se existir sessionStorage.hdud_open_chapter_id, abre automaticamente esse capítulo ao entrar.
+ *
+ * ✅ FIX importante:
+ * - Não “congelar” token/author_id no mount. Se o token for renovado/trocado, a tela precisa acompanhar.
+ *
+ * ✅ FECHAMENTO “chave de ouro”:
+ * (1) Dirty Guard: evita perder texto em demo (prompt ao trocar de capítulo / sair / recarregar).
+ * (3) 401 redirect: token expirado -> limpa token + manda para /login com retorno.
  */
 
 type ChapterStatus = "DRAFT" | "PUBLIC";
@@ -95,6 +103,12 @@ function getToken(): string | null {
   );
 }
 
+function clearTokenEverywhere() {
+  try {
+    ["HDUD_TOKEN", "access_token", "token", "hdud_access_token"].forEach((k) => localStorage.removeItem(k));
+  } catch {}
+}
+
 function parseJwtPayload(token: string): any | null {
   try {
     const parts = token.split(".");
@@ -109,6 +123,18 @@ function parseJwtPayload(token: string): any | null {
     return JSON.parse(json);
   } catch {
     return null;
+  }
+}
+
+function redirectToLogin(reason?: string) {
+  try {
+    sessionStorage.setItem("hdud_after_login_path", window.location.pathname + window.location.search + window.location.hash);
+    if (reason) sessionStorage.setItem("hdud_login_reason", reason);
+  } catch {}
+  try {
+    window.location.assign("/login");
+  } catch {
+    window.location.href = "/login";
   }
 }
 
@@ -130,6 +156,13 @@ async function apiRequest<T>(
   } catch {
     data = null;
   }
+
+  // ✅ 401 redirect (demo-proof)
+  if (resp.status === 401) {
+    clearTokenEverywhere();
+    redirectToLogin("expired");
+  }
+
   return { ok: resp.ok, status: resp.status, data, usedPath: path };
 }
 
@@ -155,6 +188,8 @@ async function tryMany<T>(
       attempts.push({ path: r.usedPath, status: r.status, ok: r.ok });
       last = { ...r, usedIndex: i };
       if (r.ok) return { ...last, attempts };
+      // ✅ se for 401, apiRequest já redirecionou; ainda assim devolvemos
+      if (r.status === 401) return { ...last, attempts };
     } catch {
       // ignora e tenta a próxima
     }
@@ -193,8 +228,11 @@ function consumeOpenChapterHint(): number | null {
   }
 }
 
+type Snapshot = { title: string; description: string; body: string; status: ChapterStatus };
+
 export default function ChaptersPage() {
-  const token = useMemo(() => getToken(), []);
+  // ✅ token/authorId NÃO congelados: acompanham login/renovação
+  const token = getToken();
   const canUseApi = !!token;
 
   const jwt = useMemo(() => (token ? parseJwtPayload(token) : null), [token]);
@@ -240,6 +278,78 @@ export default function ChaptersPage() {
   // ✅ deep-link: capítulo a abrir automaticamente (vem da Timeline)
   const pendingOpenChapterIdRef = useRef<number | null>(consumeOpenChapterHint());
 
+  // =======================
+  // Dirty Guard
+  // =======================
+  const snapshotRef = useRef<Snapshot | null>(null);
+
+  const isDirty = useMemo(() => {
+    const snap = snapshotRef.current;
+    if (!snap) return false;
+    return (
+      String(title ?? "") !== snap.title ||
+      String(description ?? "") !== snap.description ||
+      String(body ?? "") !== snap.body ||
+      (status as ChapterStatus) !== snap.status
+    );
+  }, [title, description, body, status]);
+
+  function resetSnapshot(next?: Partial<Snapshot>) {
+    const base: Snapshot = {
+      title: String(title ?? ""),
+      description: String(description ?? ""),
+      body: String(body ?? ""),
+      status: status as ChapterStatus,
+    };
+    snapshotRef.current = { ...base, ...(next ?? {}) };
+  }
+
+  function confirmIfDirty(actionLabel: string): boolean {
+    if (!isDirty) return true;
+    try {
+      return window.confirm(
+        `Você tem alterações não salvas.\n\nAção: ${actionLabel}\n\nSe continuar, você pode perder o que digitou.\n\nContinuar mesmo assim?`
+      );
+    } catch {
+      return true;
+    }
+  }
+
+  // ✅ se tentar fechar/atualizar aba com mudanças
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!isDirty) return;
+      e.preventDefault();
+      // Chrome ignora texto custom; precisa setar returnValue
+      (e as any).returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isDirty]);
+
+  // ✅ melhora: se a Timeline setar o hint e navegar, ok. Se por algum motivo setar
+  // enquanto a página já está aberta, este listener captura.
+  useEffect(() => {
+    try {
+      const onStorage = (e: StorageEvent) => {
+        if (!e) return;
+        if (e.storageArea !== sessionStorage) return;
+        if (e.key !== "hdud_open_chapter_id") return;
+        const n = Number(String(e.newValue ?? "").trim());
+        if (Number.isFinite(n) && n > 0) {
+          pendingOpenChapterIdRef.current = n;
+          void loadList();
+        }
+      };
+      window.addEventListener("storage", onStorage as any);
+      return () => window.removeEventListener("storage", onStorage as any);
+    } catch {
+      return;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function setToastAuto(t: Toast | null, ms = 3500) {
     setToast(t);
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -252,14 +362,22 @@ export default function ChaptersPage() {
   }
 
   function needAuthGuard(): boolean {
-    if (!canUseApi) {
+    // ✅ sempre lê token atual (evita “stale token”)
+    const t = getToken();
+    if (!t) {
       setToastAuto({ kind: "warn", msg: "Token ausente. Faça login para ver/editar capítulos." });
       return true;
     }
-    if (!authorId) {
+
+    const j = parseJwtPayload(t);
+    const a = j?.author_id ?? j?.authorId ?? j?.sub_author_id ?? null;
+    const n = Number(a);
+
+    if (!(Number.isFinite(n) && n > 0)) {
       setToastAuto({ kind: "warn", msg: "Não consegui identificar author_id no token. Refaça login." });
       return true;
     }
+
     return false;
   }
 
@@ -321,8 +439,17 @@ export default function ChaptersPage() {
     if (pending) {
       const exists = normalized.some((c) => c.chapter_id === pending);
       if (exists) {
+        if (!confirmIfDirty("Abrir capítulo vindo da Timeline")) {
+          setToastAuto({ kind: "warn", msg: "Você está com alterações não salvas. Salve antes de abrir outro capítulo." });
+          pendingOpenChapterIdRef.current = null;
+          return;
+        }
         pendingOpenChapterIdRef.current = null;
         await loadDetail(pending);
+        // UX: garante que o editor fique visível
+        try {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        } catch {}
         return;
       } else {
         // se não existir, seguimos fallback normal
@@ -332,7 +459,7 @@ export default function ChaptersPage() {
 
     // fallback: se nada selecionado ainda, abre o primeiro
     if (!selectedChapterId && normalized.length > 0) {
-      void loadDetail(normalized[0].chapter_id);
+      if (!isDirty) void loadDetail(normalized[0].chapter_id);
     }
   }
 
@@ -367,9 +494,12 @@ export default function ChaptersPage() {
     }
 
     setSelectedChapterId(Number(d.chapter_id));
-    setTitle(String(d.title ?? ""));
-    setDescription(String(d.description ?? ""));
-    setStatus(toStatus(d.status));
+    const nextTitle = String(d.title ?? "");
+    const nextDesc = String(d.description ?? "");
+    setTitle(nextTitle);
+    setDescription(nextDesc);
+    const nextStatus = toStatus(d.status);
+    setStatus(nextStatus);
 
     const v =
       d.current_version_id && Number.isFinite(Number(d.current_version_id))
@@ -384,17 +514,22 @@ export default function ChaptersPage() {
     const fromCurrent = (result.data as any)?.current_version?.body;
     const flat = typeof d.body === "string" ? d.body : null;
 
-    if (typeof fromCurrent === "string") setBody(fromCurrent);
-    else if (flat !== null) setBody(flat);
-    else setBody("");
+    const nextBody =
+      typeof fromCurrent === "string" ? fromCurrent : flat !== null ? flat : "";
+
+    setBody(nextBody);
 
     // ✅ importante: ao trocar de capítulo, “reseta” a lógica do template
     didFocusTitle.current = false;
     didFocusDesc.current = false;
+
+    // ✅ snapshot (dirty guard): capítulo carregado = estado limpo
+    snapshotRef.current = { title: nextTitle, description: nextDesc, body: nextBody, status: nextStatus };
   }
 
   async function createChapter() {
     if (needAuthGuard()) return;
+    if (!confirmIfDirty("Criar novo capítulo")) return;
 
     setSaving(true);
     setToast(null);
@@ -496,6 +631,9 @@ export default function ChaptersPage() {
 
     setToastAuto({ kind: "ok", msg: "Salvo." });
 
+    // ✅ após salvar, atualiza snapshot (estado limpo)
+    resetSnapshot({ title: t, description: String(description ?? ""), body: String(body ?? ""), status });
+
     await loadList();
     await loadDetail(selectedChapterId);
   }
@@ -503,6 +641,12 @@ export default function ChaptersPage() {
   async function publishChapter() {
     if (!selectedChapterId) return;
     if (needAuthGuard()) return;
+
+    // publicar muda status/flow: se tiver dirty, força salvar antes (evita publicar “sem o texto”)
+    if (isDirty) {
+      setToastAuto({ kind: "warn", msg: "Você tem alterações não salvas. Salve antes de publicar." });
+      return;
+    }
 
     setSaving(true);
     setToast(null);
@@ -546,6 +690,11 @@ export default function ChaptersPage() {
   async function unpublishChapter() {
     if (!selectedChapterId) return;
     if (needAuthGuard()) return;
+
+    if (isDirty) {
+      setToastAuto({ kind: "warn", msg: "Você tem alterações não salvas. Salve antes de despublicar." });
+      return;
+    }
 
     setSaving(true);
     setToast(null);
@@ -604,6 +753,14 @@ export default function ChaptersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ se o token/author mudar (ex.: novo login), tenta carregar de novo
+  useEffect(() => {
+    if (token && authorId) {
+      void loadList();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, authorId]);
+
   const selectedTitlePreview = title?.trim() ? title.trim() : selectedChapterId ? "Capítulo" : "—";
 
   return (
@@ -622,7 +779,10 @@ export default function ChaptersPage() {
             <div style={styles.pill}>jornada • capítulos = fases • escrita com calma</div>
             <button
               style={{ ...styles.btn, ...(loading ? styles.btnDisabled : {}) }}
-              onClick={loadList}
+              onClick={() => {
+                if (!confirmIfDirty("Atualizar lista")) return;
+                void loadList();
+              }}
               disabled={loading}
               title="Recarrega lista e, se necessário, seleciona o primeiro"
             >
@@ -644,6 +804,7 @@ export default function ChaptersPage() {
           <div style={styles.metaRow}>
             <span style={styles.smallMuted}>
               {authorId ? `author_id: ${authorId}` : "author_id: —"} • {headerCount} capítulo(s)
+              {isDirty ? <span style={styles.dirtyDot} title="Alterações não salvas"> • ● não salvo</span> : null}
             </span>
 
             <button
@@ -738,7 +899,12 @@ export default function ChaptersPage() {
                   <button
                     key={c.chapter_id}
                     style={{ ...styles.itemBtn, ...(isSelected ? styles.itemBtnActive : {}) }}
-                    onClick={() => loadDetail(c.chapter_id)}
+                    onClick={() => {
+                      if (c.chapter_id !== selectedChapterId) {
+                        if (!confirmIfDirty("Trocar de capítulo")) return;
+                      }
+                      void loadDetail(c.chapter_id);
+                    }}
                     title="Abrir capítulo"
                   >
                     <div style={styles.itemTop}>
@@ -784,7 +950,11 @@ export default function ChaptersPage() {
             <div style={styles.editorActions}>
               <button
                 style={{ ...styles.btn, ...(loading || !selectedChapterId ? styles.btnDisabled : {}) }}
-                onClick={() => selectedChapterId && loadDetail(selectedChapterId)}
+                onClick={() => {
+                  if (!selectedChapterId) return;
+                  if (!confirmIfDirty("Recarregar capítulo (perde mudanças locais)")) return;
+                  void loadDetail(selectedChapterId);
+                }}
                 disabled={loading || !selectedChapterId}
               >
                 Recarregar
@@ -943,6 +1113,7 @@ const styles: Record<string, React.CSSProperties> = {
   headerMeta: { marginTop: 10 },
   metaRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" },
   smallMuted: { fontSize: 12, opacity: 0.7 },
+  dirtyDot: { fontSize: 12, fontWeight: 900, opacity: 0.85 },
 
   diagToggle: {
     border: "1px solid var(--hdud-border)",
