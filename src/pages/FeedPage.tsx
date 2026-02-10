@@ -1,10 +1,10 @@
 ﻿// C:\HDUD_DATA\hdud-web-app\src\pages\FeedPage.tsx
-
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ComingSoonPanel from "../components/ComingSoonPanel";
 import {
   buildFeedSnapshot,
+  fetchAuthorChapters,
   fetchAuthorMemories,
   type FeedSnapshot,
 } from "../services/feed.service";
@@ -19,258 +19,302 @@ function getToken(): string | null {
   );
 }
 
-function Badge({
-  label,
-}: {
-  label: "real" | "placeholder" | "sugestão";
-}) {
-  const className =
-    label === "real"
-      ? "hdud-badge hdud-badge--real"
-      : label === "sugestão"
-      ? "hdud-badge hdud-badge--suggestion"
-      : "hdud-badge hdud-badge--placeholder";
-
-  return <span className={className}>{label}</span>;
+function parseJwtPayload(token: string): any | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = decodeURIComponent(
+      atob(b64)
+        .split("")
+        .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+        .join("")
+    );
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
 }
 
-function PlaceholderList({
-  items,
-  badgeLabel = "placeholder",
-  onItemClick,
-}: {
-  items: string[];
-  badgeLabel?: "real" | "placeholder" | "sugestão";
-  onItemClick?: (index: number) => void;
-}) {
-  return (
-    <ul>
-      {items.map((label, idx) => (
-        <li
-          key={`${label}-${idx}`}
-          style={{ cursor: onItemClick ? "pointer" : "default" }}
-          onClick={onItemClick ? () => onItemClick(idx) : undefined}
-        >
-          {label}
-          <Badge label={badgeLabel} />
-        </li>
-      ))}
-    </ul>
-  );
+function getAuthorIdFromToken(token: string | null): number | null {
+  if (!token) return null;
+  const jwt = parseJwtPayload(token);
+  const raw = jwt?.author_id ?? jwt?.authorId ?? jwt?.sub_author_id ?? null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function formatDateCompactPtBR(iso: string) {
+function formatTimeAgoPtBR(iso: string) {
   try {
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = String(d.getFullYear());
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mi = String(d.getMinutes()).padStart(2, "0");
-    return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+    const now = new Date();
+    const ms = now.getTime() - d.getTime();
+    if (Number.isNaN(ms)) return iso;
+
+    const sec = Math.floor(ms / 1000);
+    if (sec < 45) return "agora";
+
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `há ${min} min`;
+
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `há ${hr} h`;
+
+    const day = Math.floor(hr / 24);
+    if (day === 1) return "ontem";
+    if (day < 30) return `há ${day} dias`;
+
+    const mon = Math.floor(day / 30);
+    if (mon === 1) return "há 1 mês";
+    if (mon < 12) return `há ${mon} meses`;
+
+    const yr = Math.floor(mon / 12);
+    if (yr === 1) return "há 1 ano";
+    return `há ${yr} anos`;
   } catch {
     return iso;
   }
 }
 
+function FeedList({
+  items,
+  emptyText,
+  loading,
+  loadingLines = 3,
+}: {
+  items: string[] | null;
+  emptyText: string;
+  loading: boolean;
+  loadingLines?: number;
+}) {
+  if (loading) {
+    return (
+      <div style={{ display: "grid", gap: 8 }}>
+        {Array.from({ length: loadingLines }).map((_, i) => (
+          <div
+            key={`sk-${i}`}
+            className="hdud-card"
+            style={{
+              padding: 12,
+              opacity: 0.85,
+            }}
+          >
+            <div style={{ height: 12, width: "72%", background: "var(--hdud-surface-2)", borderRadius: 8 }} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!items) return <div style={{ fontSize: 13, opacity: 0.7 }}>Entre para ver seu feed.</div>;
+  if (items.length === 0) return <div style={{ fontSize: 13, opacity: 0.7 }}>{emptyText}</div>;
+
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      {items.map((label, idx) => (
+        <div key={`${label}-${idx}`} className="hdud-card" style={{ padding: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 800 }}>{label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function FeedPage() {
-  const authorId = 1;
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<FeedSnapshot | null>(null);
 
-  const token = useMemo(() => getToken(), []);
+  // ✅ token/authorId NÃO congelados
+  const token = getToken();
+  const authorId = getAuthorIdFromToken(token) ?? 1; // fallback seguro (não quebra demo)
 
-  useEffect(() => {
-    let alive = true;
+  // ✅ request guard (evita “flash” de respostas velhas)
+  const seqRef = useRef(0);
 
-    async function load() {
-      setError(null);
+  async function load() {
+    const seq = ++seqRef.current;
 
-      if (!token) {
-        setSnapshot(null);
-        return;
-      }
+    setError(null);
 
-      setLoading(true);
-      try {
-        const memories = await fetchAuthorMemories(token, authorId);
-        const snap = buildFeedSnapshot(memories);
-        if (alive) setSnapshot(snap);
-      } catch (e: any) {
-        if (alive) {
-          setSnapshot(null);
-          setError(e?.message ?? "Falha ao carregar dados do Feed.");
-        }
-      } finally {
-        if (alive) setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      alive = false;
-    };
-  }, [token, authorId]);
-
-  const weekItems = useMemo(() => {
-    if (!snapshot) return null;
-    return [
-      `${snapshot.counts.memoriesTotal} memórias criadas`,
-      `${snapshot.counts.versionsTotal} versões registradas`,
-      `${snapshot.counts.rollbacksTotal} rollbacks aplicados`,
-      `${snapshot.counts.chaptersTotal} capítulos atualizados`,
-    ];
-  }, [snapshot]);
-
-  const recentItems = useMemo(() => {
-    if (!snapshot) return null;
-    if (!snapshot.recentMemories?.length) return [];
-    return snapshot.recentMemories.map(
-      (m) =>
-        `${m.title} · v${m.version_number} · ${formatDateCompactPtBR(
-          m.created_at
-        )}`
-    );
-  }, [snapshot]);
-
-  const onboardingSuggestions = useMemo(() => {
-    if (!snapshot) {
-      return [
-        "Criar sua primeira memória",
-        "Escolher seus capítulos iniciais",
-        "Explorar a Timeline (visualização)",
-      ];
-    }
-
-    const suggestions: string[] = [];
-
-    if (snapshot.counts.memoriesTotal === 0) {
-      suggestions.push("Criar sua primeira memória");
-    } else {
-      suggestions.push("Revisar sua última memória");
-    }
-
-    suggestions.push("Escolher seus capítulos iniciais");
-    suggestions.push("Explorar a Timeline (visualização)");
-
-    return suggestions;
-  }, [snapshot]);
-
-  function handleSuggestionClick(index: number) {
-    if (!snapshot) return;
-
-    if (index === 0) {
-      // Revisar última memória → pega a mais recente
-      const last = snapshot.recentMemories?.[0];
-      if (last) navigate(`/memories/${last.memory_id}`);
+    const t = getToken();
+    if (!t) {
+      setSnapshot(null);
+      setLoading(false);
       return;
     }
 
-    if (index === 1) {
-      navigate("/chapters");
-      return;
-    }
+    setLoading(true);
 
-    if (index === 2) {
-      navigate("/timeline");
-      return;
+    try {
+      const aId = getAuthorIdFromToken(t) ?? authorId;
+
+      const [memories, chapters] = await Promise.all([
+        fetchAuthorMemories(t, aId),
+        fetchAuthorChapters(t, aId),
+      ]);
+
+      if (seq !== seqRef.current) return;
+
+      const snap = buildFeedSnapshot(memories, chapters.length);
+      setSnapshot(snap);
+    } catch (e: any) {
+      if (seq !== seqRef.current) return;
+      setSnapshot(null);
+      setError(e?.message ?? "Falha ao carregar seu Feed.");
+    } finally {
+      if (seq === seqRef.current) setLoading(false);
     }
   }
 
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]); // quando token muda, recarrega
+
+  const storySoFarText = useMemo(() => {
+    if (!snapshot) return null;
+    const m = snapshot.counts.memoriesTotal ?? 0;
+    const c = snapshot.counts.chaptersTotal ?? 0;
+    return `Sua história até agora: ${m} memórias · ${c} capítulos`;
+  }, [snapshot]);
+
+  const movementItems = useMemo(() => {
+    if (!snapshot) return null;
+    if (!snapshot.recentMemories?.length) return [];
+
+    return snapshot.recentMemories.map((m) => {
+      const title = m.title || "(sem título)";
+      const when = formatTimeAgoPtBR(m.created_at);
+      const action = (m.version_number ?? 1) > 1 ? "Memória editada" : "Memória criada";
+      return `Memória · ${action} · ${title} · ${when}`;
+    });
+  }, [snapshot]);
+
+  const headerName = "Alexandre Neves"; // MVP: depois vem do /me/profile
+
+  const hintMovement = useMemo(() => {
+    if (loading) return "Atualizando…";
+    if (!token) return "Entre para ver";
+    if (snapshot) return "Atualizado";
+    return "Em breve";
+  }, [loading, token, snapshot]);
+
+  const hintSoFar = useMemo(() => {
+    if (loading) return "Atualizando…";
+    if (!token) return "Entre para ver";
+    if (snapshot) return "Atualizado";
+    return "Em breve";
+  }, [loading, token, snapshot]);
+
   return (
-    <div className="hdud-page space-y-4">
-      <div className="hdud-card">
-        <h1 className="hdud-title">Feed</h1>
-        <p className="hdud-subtitle">
-          Sua visão geral do HDUD. Aqui você verá o que mudou, o que está em
-          progresso e sugestões de próximos passos.
-        </p>
+    <div className="hdud-page">
+      <div className="hdud-container" style={{ margin: "0 auto" }}>
+        <div className="hdud-card">
+          <div className="hdud-pagehead">
+            <div style={{ minWidth: 0 }}>
+              <h1 className="hdud-pagehead-title">Seu presente narrativo</h1>
+              <p className="hdud-pagehead-subtitle">O que está vivo agora na sua história.</p>
 
-        {error && (
-          <div className="mt-3 rounded-lg border px-3 py-2 text-sm">
-            <div className="font-semibold">Atenção</div>
-            <div className="opacity-80">{error}</div>
+              <div style={{ marginTop: 14, display: "grid", gap: 6 }}>
+                <div style={{ fontSize: 16, fontWeight: 900 }}>{headerName}</div>
+                <div style={{ fontSize: 13, opacity: 0.75, fontWeight: 700 }}>
+                  Autor • HDUD{authorId ? <span style={{ opacity: 0.6 }}> • id {authorId}</span> : null}
+                </div>
+                {storySoFarText ? (
+                  <div style={{ marginTop: 6, fontSize: 13, opacity: 0.8 }}>{storySoFarText}</div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="hdud-actions">
+              {!token ? (
+                <button
+                  className="hdud-btn hdud-btn-primary"
+                  onClick={() => navigate("/login")}
+                  title="Entrar"
+                >
+                  Entrar
+                </button>
+              ) : (
+                <button
+                  className="hdud-btn"
+                  onClick={() => {
+                    if (loading) return;
+                    void load();
+                  }}
+                  disabled={loading}
+                  title="Atualizar"
+                >
+                  {loading ? "Atualizando…" : "Atualizar"}
+                </button>
+              )}
+            </div>
           </div>
-        )}
-      </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <ComingSoonPanel
-          title="Sua semana"
-          subtitle="Resumo do seu ritmo: novas memórias, versões e marcos."
-          hint={loading ? "Carregando" : snapshot ? "Atualizado" : "Em breve"}
+          {error ? (
+            <div className="hdud-alert hdud-alert-warn" style={{ marginTop: 14 }}>
+              <div style={{ fontWeight: 900, marginBottom: 4 }}>Não consegui abrir seu Feed</div>
+              <div style={{ opacity: 0.85 }}>{error}</div>
+              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  className="hdud-btn hdud-btn-primary"
+                  onClick={() => void load()}
+                  disabled={loading}
+                >
+                  Tentar novamente
+                </button>
+                <button className="hdud-btn" onClick={() => navigate("/chapters")}>
+                  Ir para Capítulos
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {!token ? (
+            <div className="hdud-alert hdud-alert-warn" style={{ marginTop: 14 }}>
+              Você ainda não entrou. Faça login para ver seu “presente narrativo”.
+            </div>
+          ) : null}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gap: 14,
+            marginTop: 14,
+            gridTemplateColumns: "1fr 1fr",
+          }}
+          className="hdud-grid-2"
         >
-          {weekItems ? (
-            <PlaceholderList items={weekItems} badgeLabel="real" />
-          ) : (
-            <PlaceholderList
-              items={[
-                "0 memórias criadas",
-                "0 versões registradas",
-                "0 rollbacks aplicados",
-                "0 capítulos atualizados",
-              ]}
-              badgeLabel="placeholder"
+          <ComingSoonPanel
+            title="Em movimento"
+            subtitle="O que evoluiu recentemente na sua história."
+            hint={hintMovement}
+          >
+            <FeedList
+              items={movementItems}
+              loading={loading}
+              emptyText="Nenhuma atividade recente ainda. Crie ou edite uma memória para o feed ganhar vida."
+              loadingLines={3}
             />
-          )}
-        </ComingSoonPanel>
+          </ComingSoonPanel>
 
-        <ComingSoonPanel
-          title="Memórias recentes"
-          subtitle="As últimas memórias criadas/atualizadas aparecerão aqui."
-          hint={loading ? "Carregando" : snapshot ? "Atualizado" : "Em breve"}
-        >
-          {recentItems ? (
-            recentItems.length > 0 ? (
-              <PlaceholderList items={recentItems} badgeLabel="real" />
-            ) : (
-              <PlaceholderList
-                items={["Nenhuma memória encontrada ainda."]}
-                badgeLabel="real"
-              />
-            )
-          ) : (
-            <PlaceholderList
-              items={[
-                "Ex.: 'Minha primeira lembrança…'",
-                "Ex.: 'O dia em que eu decidi…'",
-                "Ex.: 'Uma conversa que mudou tudo…'",
-              ]}
-              badgeLabel="placeholder"
+          <ComingSoonPanel
+            title="Sua história até agora"
+            subtitle="Um lembrete leve da sua jornada até aqui."
+            hint={hintSoFar}
+          >
+            <FeedList
+              items={storySoFarText ? [storySoFarText] : token ? [] : null}
+              loading={loading}
+              emptyText="Ainda não há números para mostrar. Comece criando uma memória ou um capítulo."
+              loadingLines={2}
             />
-          )}
-        </ComingSoonPanel>
-
-        <ComingSoonPanel
-          title="Em progresso"
-          subtitle="Itens que estão no seu radar e precisam de continuidade."
-          hint="Em breve"
-        >
-          <PlaceholderList
-            items={[
-              "Capítulo: Origem (planejado)",
-              "Capítulo: Infância (planejado)",
-              "Capítulo: Trabalho (planejado)",
-            ]}
-            badgeLabel="placeholder"
-          />
-        </ComingSoonPanel>
-
-        <ComingSoonPanel
-          title="Sugestões do produto"
-          subtitle="Próximos passos guiados (onboarding e evolução)."
-          hint={snapshot ? "Personalizado" : "Em breve"}
-        >
-          <PlaceholderList
-            items={onboardingSuggestions}
-            badgeLabel={snapshot ? "sugestão" : "placeholder"}
-            onItemClick={handleSuggestionClick}
-          />
-        </ComingSoonPanel>
+          </ComingSoonPanel>
+        </div>
       </div>
     </div>
   );

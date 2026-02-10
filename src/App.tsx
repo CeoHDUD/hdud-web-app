@@ -16,7 +16,11 @@ import TimelinePage from "./pages/TimelinePage";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
 
-import { setUnauthorizedHandler, apiRequest } from "./lib/api";
+import {
+  setUnauthorizedHandler,
+  tryRefreshNow,
+  setSessionExpiredNotice,
+} from "./lib/api";
 
 // =======================
 // Theme
@@ -56,13 +60,59 @@ function clearHdudSession() {
     "HDUD_TOKEN",
     "access_token",
     "token",
+
+    // ✅ refresh keys (novas + compat)
     "refresh_token",
+    "hdud_refresh_token",
+
+    // user-ish
     "author_id",
     "HDUD_AUTHOR_ID",
     "user_id",
     "email",
   ];
   for (const k of keys) localStorage.removeItem(k);
+}
+
+// =======================
+// After-login helpers
+// =======================
+function setAfterLoginPath(path: string, reason?: string) {
+  try {
+    const p = String(path || "").trim();
+    if (p) sessionStorage.setItem("hdud_after_login_path", p);
+    if (reason) sessionStorage.setItem("hdud_login_reason", reason);
+  } catch {
+    // ignore
+  }
+}
+
+function consumeAfterLoginPath(): string | null {
+  try {
+    const p = sessionStorage.getItem("hdud_after_login_path");
+    if (p) sessionStorage.removeItem("hdud_after_login_path");
+    sessionStorage.removeItem("hdud_login_reason");
+    return p || null;
+  } catch {
+    return null;
+  }
+}
+
+function redirectToLogin(reason?: string) {
+  try {
+    setAfterLoginPath(
+      window.location.pathname + window.location.search + window.location.hash,
+      reason
+    );
+  } catch {
+    // ignore
+  }
+
+  try {
+    window.location.assign("/login");
+  } catch {
+    window.location.href = "/login";
+  }
 }
 
 // =======================
@@ -141,6 +191,15 @@ const ACTIVITY_REFRESH_THROTTLE_MS = 60 * 1000;
 // Considera “idle” se sem atividade por 2 min (só para gatilho quando volta)
 const IDLE_AFTER_MS = 2 * 60 * 1000;
 
+// =======================
+// Dirty Guard (app-level)
+// =======================
+type DirtyState = {
+  dirty: boolean;
+  message?: string;
+  source?: string;
+};
+
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>("light");
@@ -151,6 +210,92 @@ export default function App() {
   // Controle de activity refresh (throttle + idle)
   const lastActivityAtRef = useRef<number>(Date.now());
   const lastActivityRefreshAtRef = useRef<number>(0);
+
+  // Dirty state global (recebido por event)
+  const dirtyRef = useRef<DirtyState>({
+    dirty: false,
+    message: "Você tem alterações não salvas. Deseja sair sem salvar?",
+    source: "",
+  });
+
+  function isDirtyNow() {
+    return !!dirtyRef.current?.dirty;
+  }
+
+  function confirmLeave(custom?: string) {
+    const msg =
+      custom ||
+      dirtyRef.current?.message ||
+      "Você tem alterações não salvas. Deseja sair sem salvar?";
+    return window.confirm(msg);
+  }
+
+  // Escuta eventos hdud:dirty (emitido por páginas)
+  useEffect(() => {
+    function onDirty(e: Event) {
+      const ce = e as CustomEvent<DirtyState>;
+      const d = ce?.detail;
+      dirtyRef.current = {
+        dirty: !!d?.dirty,
+        message: d?.message || dirtyRef.current.message,
+        source: d?.source || dirtyRef.current.source,
+      };
+    }
+
+    window.addEventListener("hdud:dirty", onDirty as any);
+    return () => window.removeEventListener("hdud:dirty", onDirty as any);
+  }, []);
+
+  // Guard de back/forward (popstate)
+  useEffect(() => {
+    function onPopState() {
+      if (!isDirtyNow()) return;
+
+      const ok = confirmLeave(
+        "Você tem alterações não salvas. Deseja voltar/avançar e perder essas alterações?"
+      );
+
+      if (!ok) {
+        try {
+          history.pushState(null, "", window.location.href);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    try {
+      history.pushState(null, "", window.location.href);
+    } catch {
+      // ignore
+    }
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  // Guard de hashchange (se futuramente usar âncoras)
+  useEffect(() => {
+    function onHashChange(e: HashChangeEvent) {
+      if (!isDirtyNow()) return;
+
+      const ok = confirmLeave(
+        "Você tem alterações não salvas. Deseja continuar e perder essas alterações?"
+      );
+
+      if (!ok) {
+        e.preventDefault?.();
+        try {
+          window.location.hash = new URL(e.oldURL).hash;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    window.addEventListener("hashchange", onHashChange as any);
+    return () => window.removeEventListener("hashchange", onHashChange as any);
+  }, []);
 
   // =======================
   // Bootstrap
@@ -174,11 +319,40 @@ export default function App() {
   function handleLoggedIn(accessToken: string) {
     setTokenToStorage(accessToken);
     setToken(accessToken);
+
+    // ✅ volta para onde estava (quando veio de 401/redirect manual)
+    const back = consumeAfterLoginPath();
+    if (back && back !== "/login") {
+      try {
+        window.location.assign(back);
+      } catch {
+        window.location.href = back;
+      }
+      return;
+    }
+
+    // fallback
+    if (window.location.pathname === "/login" || window.location.pathname === "/") {
+      try {
+        window.location.assign("/dashboard");
+      } catch {
+        window.location.href = "/dashboard";
+      }
+    }
   }
 
   function handleLogout() {
+    if (isDirtyNow()) {
+      const ok = confirmLeave("Você tem alterações não salvas. Deseja sair mesmo assim?");
+      if (!ok) return;
+    }
+
     clearHdudSession();
-    window.location.href = "/";
+    try {
+      window.location.assign("/login");
+    } catch {
+      window.location.href = "/login";
+    }
   }
 
   // =======================
@@ -186,9 +360,19 @@ export default function App() {
   // =======================
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      // ✅ guarda “voltar pra onde estava”
+      setAfterLoginPath(
+        window.location.pathname + window.location.search + window.location.hash,
+        "expired"
+      );
+
+      // ✅ banner no login
+      setSessionExpiredNotice();
+
       clearHdudSession();
-      window.location.href = "/";
+      redirectToLogin("expired");
     });
+
     return () => setUnauthorizedHandler(null);
   }, []);
 
@@ -202,16 +386,20 @@ export default function App() {
   }
 
   // =======================
-  // Função central de refresh (reutilizada)
+  // Refresh central (✅ usa refresh_token via lib/api)
   // =======================
   async function doRefresh(reason: string) {
     try {
       debugLog("refresh start:", reason);
 
-      await apiRequest("/auth/refresh", {
-        method: "POST",
-        skipAuthRetry: true, // evita recursão
-      });
+      const ok = await tryRefreshNow(); // ✅ envia refresh_token corretamente
+      if (!ok) {
+        // não tinha refresh token ou falhou
+        setSessionExpiredNotice();
+        emitAuthFail();
+        debugLog("refresh fail(no token):", reason);
+        return;
+      }
 
       emitAuthRefreshed();
       debugLog("refresh ok:", reason);
@@ -219,9 +407,9 @@ export default function App() {
       const newToken = getTokenFromStorage();
       if (newToken) setToken(newToken);
     } catch {
+      setSessionExpiredNotice();
       emitAuthFail();
-      debugLog("refresh fail:", reason);
-      // Se falhar, o handler global de 401 cuida do logout (via requests seguintes)
+      debugLog("refresh fail(exception):", reason);
     }
   }
 
@@ -274,13 +462,11 @@ export default function App() {
     async function maybeRefreshOnReturn(reason: string) {
       if (!token) return;
 
-      // throttle
       const now = Date.now();
       if (now - lastActivityRefreshAtRef.current < ACTIVITY_REFRESH_THROTTLE_MS) {
         return;
       }
 
-      // só se estiver perto de expirar
       if (!shouldRefreshSoon(token)) return;
 
       lastActivityRefreshAtRef.current = now;
@@ -292,11 +478,9 @@ export default function App() {
         const now = Date.now();
         const idleFor = now - lastActivityAtRef.current;
 
-        // Se voltou depois de idle, tenta refresh (se estiver perto do exp)
         if (idleFor >= IDLE_AFTER_MS) {
           void maybeRefreshOnReturn("return-from-idle(visibility)");
         } else {
-          // Mesmo sem idle, ao voltar foco pode ser útil
           void maybeRefreshOnReturn("focus(visibility)");
         }
       }
@@ -312,7 +496,6 @@ export default function App() {
       }
     }
 
-    // Activity signals
     const activityEvents: Array<keyof WindowEventMap> = [
       "mousemove",
       "keydown",
@@ -339,12 +522,17 @@ export default function App() {
 
   const isLoggedIn = useMemo(() => Boolean(token), [token]);
 
+  // ✅ Deslogado: mantém o comportamento atual (Login em qualquer rota),
+  // e garante que /login funcione naturalmente.
   if (!isLoggedIn || !token) {
     return <Login onLoggedIn={handleLoggedIn} />;
   }
 
+  // ✅ Logado: rotas do app + /login redireciona pra dashboard
   return (
     <Routes>
+      <Route path="/login" element={<Navigate to="/dashboard" replace />} />
+
       <Route element={<AppShell onLogout={handleLogout} />}>
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/feed" element={<FeedPage />} />

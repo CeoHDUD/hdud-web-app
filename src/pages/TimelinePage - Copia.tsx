@@ -30,36 +30,35 @@ function tryExtractTokenFromValue(v: string): string | null {
   const s = (v || "").trim();
   if (!s) return null;
 
-  // JWT típico
   if (s.split(".").length === 3) return s;
 
-  // Às vezes salvam JSON no localStorage
   try {
     const obj = JSON.parse(s);
-    const candidates = [
-      obj?.access_token,
-      obj?.token,
-      obj?.jwt,
-      obj?.data?.access_token,
-      obj?.data?.token,
-    ];
+    const candidates = [obj?.access_token, obj?.token, obj?.jwt, obj?.data?.access_token, obj?.data?.token];
     for (const t of candidates) {
       if (typeof t === "string" && t.trim().split(".").length === 3) return t.trim();
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
 
   return null;
 }
 
-/**
- * ✅ Ajuste MINIMAL / SEGURO:
- * O App.tsx padroniza token nestes 4 keys.
- * Evitamos varrer o localStorage inteiro (pode pegar token velho/errado).
- */
 function getAuthToken(): string | null {
-  const candidates = ["hdud_access_token", "HDUD_TOKEN", "access_token", "token"];
+  const candidates = [
+    "hdud_access_token",
+    "HDUD_TOKEN",
+    "access_token",
+    "token",
+    "hdud_token",
+    "auth_token",
+    "jwt",
+    "id_token",
+    "session_token",
+    "hdud.access_token",
+    "hdud.token",
+    "hdud.auth",
+    "auth",
+  ];
 
   for (const k of candidates) {
     const v = window.localStorage.getItem(k);
@@ -68,6 +67,16 @@ function getAuthToken(): string | null {
     const token = tryExtractTokenFromValue(v);
     if (token) return token;
   }
+
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (!key) continue;
+      const v = window.localStorage.getItem(key) || "";
+      const token = tryExtractTokenFromValue(v);
+      if (token) return token;
+    }
+  } catch {}
 
   return null;
 }
@@ -91,11 +100,8 @@ function parseJwtPayload(token: string): any | null {
 
 function getApiBase(): string {
   const env = (import.meta as any).env || {};
-  const base =
-    env.VITE_API_BASE || env.VITE_API_URL || env.VITE_BACKEND_URL || env.VITE_API || "";
-  return String(base || "")
-    .trim()
-    .replace(/\/+$/, "");
+  const base = env.VITE_API_BASE || env.VITE_API_URL || env.VITE_BACKEND_URL || env.VITE_API || "";
+  return String(base || "").trim().replace(/\/+$/, "");
 }
 
 function normalizeUrl(path: string): string {
@@ -187,9 +193,7 @@ async function tryMany(
       last = r;
       if (r.ok) return { ...r, attempts };
       if (r.status === 401) return { ...r, attempts };
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   return { ...last, attempts };
@@ -262,16 +266,14 @@ function kindIcon(kind: TimelineKind): string {
 
 // =====================
 // Normalize API -> UI model
-// (o /timeline da API entrega: { type, title, date, source_id, meta, ... })
 // =====================
 function normalizeApiTimelineItemToEvent(item: any): TimelineEvent | null {
   if (!item || typeof item !== "object") return null;
 
-  const typeRaw = String(item.type ?? item.kind ?? "").trim().toLowerCase(); // memory|chapter|version
+  const typeRaw = String(item.type ?? item.kind ?? "").trim().toLowerCase();
   const title = String(item.title ?? "").trim() || "(sem título)";
   const at = String(item.date ?? item.at ?? item.created_at ?? "").trim();
 
-  // IDs: preferimos os reais (memory_id/chapter_id/version) e caímos no source_id
   const sourceId = String(item.source_id ?? item.id ?? "").trim();
 
   let kind: TimelineKind = "Evento";
@@ -291,26 +293,19 @@ function normalizeApiTimelineItemToEvent(item: any): TimelineEvent | null {
     source = "ledger";
   }
 
-  // id que habilita clique/navegação:
-  // memory:82, chapter:11, etc.
-  // Para versões: "memoryId:versionNumber" pode vir no source_id; nesse caso mantemos algo único.
   let id = "";
   if (kind === "Memória") id = `memory:${sourceId}`;
   else if (kind === "Capítulo") id = `chapter:${sourceId}`;
   else if (kind === "Versão") id = `version:${sourceId || `${item.memory_id ?? ""}:${item.version_number ?? ""}`}`;
   else id = `event:${sourceId || Math.random().toString(36).slice(2)}`;
 
-  // note (quando existir)
   const note =
     (typeof item.note === "string" && item.note.trim()) ||
     (typeof item.meta?.preview === "string" && item.meta.preview.trim()) ||
     (typeof item.meta?.description === "string" && item.meta.description.trim()) ||
     undefined;
 
-  // raw: mantemos tudo (inclui meta.nav vindo do backend)
   const raw = item;
-
-  // at: se veio vazio, evita quebrar agrupamento
   const atSafe = at || new Date().toISOString();
 
   return { id, at: atSafe, title, kind, note, source, raw };
@@ -325,9 +320,7 @@ function toNum(v: any): number | null {
   return null;
 }
 
-function extractIdFromTimelineKey(
-  id: string
-): { kind: "memory" | "chapter" | "unknown"; id: number | null } {
+function extractIdFromTimelineKey(id: string): { kind: "memory" | "chapter" | "unknown"; id: number | null } {
   const s = String(id || "").trim();
 
   const m1 = s.match(/^memory:(\d+)$/i);
@@ -345,13 +338,11 @@ function extractTarget(ev: TimelineEvent): { kind: "memory" | "chapter" | "unkno
 
   const raw = ev.raw || {};
 
-  // ✅ tentar meta do backend (/timeline)
   const metaMid = toNum(raw?.meta?.memory_id) ?? toNum(raw?.meta?.memoryId);
   const metaCid = toNum(raw?.meta?.chapter_id) ?? toNum(raw?.meta?.chapterId);
   if (metaMid && metaMid > 0) return { kind: "memory", id: metaMid };
   if (metaCid && metaCid > 0) return { kind: "chapter", id: metaCid };
 
-  // memory id (fallbacks)
   const mid =
     toNum(raw?.memory_id) ??
     toNum(raw?.memoryId) ??
@@ -360,12 +351,7 @@ function extractTarget(ev: TimelineEvent): { kind: "memory" | "chapter" | "unkno
     toNum(raw?.entity_id) ??
     toNum(raw?.entityId);
 
-  // chapter id (fallbacks)
-  const cid =
-    toNum(raw?.chapter_id) ??
-    toNum(raw?.chapterId) ??
-    toNum(raw?.id_chapter) ??
-    toNum(raw?.idChapter);
+  const cid = toNum(raw?.chapter_id) ?? toNum(raw?.chapterId) ?? toNum(raw?.id_chapter) ?? toNum(raw?.idChapter);
 
   if (mid && mid > 0) return { kind: "memory", id: mid };
   if (cid && cid > 0) return { kind: "chapter", id: cid };
@@ -426,7 +412,6 @@ function entityKey(ev: TimelineEvent): string | null {
   if (t.kind === "memory" && t.id) return `memory:${t.id}`;
   if (t.kind === "chapter" && t.id) return `chapter:${t.id}`;
 
-  // Fallback por título (quando backend não entrega ids).
   const title = String(ev.title || "").trim().toLowerCase();
   const src = String(ev.source || "unknown").trim().toLowerCase();
 
@@ -434,8 +419,6 @@ function entityKey(ev: TimelineEvent): string | null {
   return null;
 }
 
-// Mantém APENAS o evento mais recente por entidade.
-// (id real quando existir; senão fallback por source+title)
 function collapseToLatestPerEntity(list: TimelineEvent[]): TimelineEvent[] {
   const sorted = [...list].sort(sortEventsDesc);
 
@@ -450,7 +433,6 @@ function collapseToLatestPerEntity(list: TimelineEvent[]): TimelineEvent[] {
     out.push(ev);
   }
 
-  // Se não conseguimos identificar nenhuma “entidade”, devolve um recorte seguro.
   if (out.length === 0) return sorted.slice(0, 50);
 
   return out;
@@ -473,7 +455,7 @@ export default function TimelinePage() {
 
   const [query, setQuery] = useState("");
 
-  // ✅ INVENTÁRIO REAL (79 / 11 etc.)
+  // ✅ INVENTÁRIO REAL
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventoryMemoriesTotal, setInventoryMemoriesTotal] = useState<number | null>(null);
   const [inventoryChaptersTotal, setInventoryChaptersTotal] = useState<number | null>(null);
@@ -540,9 +522,7 @@ export default function TimelinePage() {
 
       if (!ok) {
         const detail =
-          typeof data === "object" && data
-            ? data?.detail || data?.error || JSON.stringify(data)
-            : String(data);
+          typeof data === "object" && data ? data?.detail || data?.error || JSON.stringify(data) : String(data);
 
         setErrorMsg(`Não foi possível carregar a Timeline (HTTP ${status}). ${detail || ""}`.trim());
         setEvents([]);
@@ -590,12 +570,9 @@ export default function TimelinePage() {
     setInventoryLoading(true);
 
     try {
-      // MEMÓRIAS (INVENTÁRIO REAL)
       const memRes = await tryMany(token, [
         "/api/memories",
-        ...(authorOk
-          ? [`/api/authors/${authorId}/memories`, `/api/author/${authorId}/memories`, `/api/memories/${authorId}`]
-          : []),
+        ...(authorOk ? [`/api/authors/${authorId}/memories`, `/api/author/${authorId}/memories`, `/api/memories/${authorId}`] : []),
       ]);
 
       const memTotalFromMeta =
@@ -620,7 +597,6 @@ export default function TimelinePage() {
         }
       }
 
-      // CAPÍTULOS
       const chapRes = await tryMany(token, [
         "/api/chapters",
         "/api/chapter",
@@ -652,7 +628,6 @@ export default function TimelinePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Contadores “de eventos” (suporte interno; chips usam inventário)
   const eventCounts = useMemo(() => {
     return {
       Tudo: events.length,
@@ -661,7 +636,6 @@ export default function TimelinePage() {
     };
   }, [events]);
 
-  // ✅ Chips: INVENTÁRIO REAL (quando disponível)
   const chipCounts = useMemo(() => {
     const mem = inventoryMemoriesTotal ?? eventCounts.Memórias;
     const chap = inventoryChaptersTotal ?? eventCounts.Capítulos;
@@ -676,7 +650,6 @@ export default function TimelinePage() {
     };
   }, [events.length, inventoryMemoriesTotal, inventoryChaptersTotal, eventCounts.Memórias, eventCounts.Capítulos]);
 
-  // ✅ Não renderiza “Versão”
   const displayEvents = useMemo(() => {
     return events.filter((ev) => normalizeKind(ev) !== "Versão");
   }, [events]);
@@ -684,12 +657,10 @@ export default function TimelinePage() {
   const filteredEvents = useMemo(() => {
     const searching = Boolean(query.trim());
 
-    // Ao buscar: colapsa para “estado atual” (max versão)
     const baseList = searching ? collapseToLatestPerEntity(displayEvents) : displayEvents;
 
     let list = baseList;
 
-    // filtro por tipo
     if (activeFilter !== "Tudo") {
       const want: TimelineKind = activeFilter === "Memórias" ? "Memória" : "Capítulo";
       list = list.filter((e) => normalizeKind(e) === want);
@@ -731,281 +702,272 @@ export default function TimelinePage() {
   }, [loading, errorMsg]);
 
   return (
-    <div style={styles.page}>
-      {/* Header */}
-      <div style={styles.card}>
-        <div style={styles.headerRow}>
-          <div style={{ minWidth: 0 }}>
-            <div style={styles.h1}>Timeline</div>
-            <div style={styles.sub}>
-              Nada se perde. Aqui está a linha do tempo do que aconteceu na sua história — com eventos claros e clicáveis.
-            </div>
+    <div className="hdud-page">
+      <div className="hdud-container" style={{ margin: "0 auto" }}>
+        {/* Header (padrão HDUD) */}
+        <div className="hdud-card">
+          <div className="hdud-pagehead">
+            <div style={{ minWidth: 0 }}>
+              <h1 className="hdud-pagehead-title">Timeline</h1>
+              <p className="hdud-pagehead-subtitle">
+                Nada se perde. Aqui está a linha do tempo do que aconteceu na sua história — com eventos claros e clicáveis.
+              </p>
 
-            <div style={styles.badgeRow}>
-              <span style={styles.badgeSoft}>
-                Status: <b style={{ opacity: 1 }}>{statusLine}</b>
-                {lastUpdated && !loading && !errorMsg ? (
-                  <span style={{ opacity: 0.75 }}>
-                    {" "}
-                    • Atualizado:{" "}
-                    <b>
-                      {lastUpdated.toLocaleTimeString("pt-BR", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </b>
-                  </span>
-                ) : null}
-              </span>
+              <div style={styles.badgeRow}>
+                <span style={styles.badgeSoft}>
+                  Status: <b style={{ opacity: 1 }}>{statusLine}</b>
+                  {lastUpdated && !loading && !errorMsg ? (
+                    <span style={{ opacity: 0.75 }}>
+                      {" "}
+                      • Atualizado:{" "}
+                      <b>
+                        {lastUpdated.toLocaleTimeString("pt-BR", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </b>
+                    </span>
+                  ) : null}
+                </span>
 
-              <button type="button" style={styles.btnGhost} onClick={() => setDebugOpen((v) => !v)}>
-                {debugOpen ? "Ocultar diagnóstico" : "Diagnóstico"}
-              </button>
-            </div>
-
-            {debugOpen && (
-              <div style={styles.diagBox}>
-                <div style={styles.diagLine}>
-                  <b>Endpoint</b>: {debugInfo.usedUrl}
-                </div>
-                <div style={styles.diagLine}>
-                  <b>Authorization enviado</b>: {debugInfo.authSent ? "sim" : "não"}
-                </div>
-                <div style={styles.diagLine}>
-                  <b>HTTP</b>: {debugInfo.httpStatus == null ? "—" : debugInfo.httpStatus}
-                </div>
-                <div style={styles.diagLine}>
-                  <b>Token</b>: {debugInfo.tokenPresent ? "detectado" : "ausente"}
-                </div>
-                <div style={styles.diagHint}>
-                  Inventário (Memórias/Capítulos) é carregado via <code>/api/*</code> para bater com números reais.
-                </div>
+                <button type="button" className="hdud-btn" style={styles.btnGhost} onClick={() => setDebugOpen((v) => !v)}>
+                  {debugOpen ? "Ocultar diagnóstico" : "Diagnóstico"}
+                </button>
               </div>
-            )}
-          </div>
 
-          <div style={styles.headerActions}>
-            <button
-              type="button"
-              style={{ ...styles.btn, ...((loading || inventoryLoading) ? styles.btnDisabled : {}) }}
-              onClick={loadAll}
-              disabled={loading || inventoryLoading}
-            >
-              {loading || inventoryLoading ? "Atualizando…" : "Atualizar"}
-            </button>
-          </div>
-        </div>
-      </div>
+              {debugOpen && (
+                <div style={styles.diagBox}>
+                  <div style={styles.diagLine}>
+                    <b>Endpoint</b>: {debugInfo.usedUrl}
+                  </div>
+                  <div style={styles.diagLine}>
+                    <b>Authorization enviado</b>: {debugInfo.authSent ? "sim" : "não"}
+                  </div>
+                  <div style={styles.diagLine}>
+                    <b>HTTP</b>: {debugInfo.httpStatus == null ? "—" : debugInfo.httpStatus}
+                  </div>
+                  <div style={styles.diagLine}>
+                    <b>Token</b>: {debugInfo.tokenPresent ? "detectado" : "ausente"}
+                  </div>
+                  <div style={styles.diagHint}>
+                    Inventário (Memórias/Capítulos) é carregado via <code>/api/*</code> para bater com números reais.
+                  </div>
+                </div>
+              )}
+            </div>
 
-      {/* Filters + Search */}
-      <div style={styles.card}>
-        <div style={styles.rowBetween}>
-          <div>
-            <div style={styles.cardTitle}>Em foco</div>
-            <div style={styles.cardMeta}>Filtre por tipo, se quiser — a Timeline continua sendo uma linha única.</div>
-          </div>
-
-          <div style={styles.smallMuted}>
-            Eventos: <b>{filteredEvents.length}</b> / {displayEvents.length}
-            {inventoryLoading ? <span style={{ marginLeft: 8, opacity: 0.75 }}>• Inventário…</span> : null}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-          {filters.map((f) => {
-            const isActive = f === activeFilter;
-            const count = f === "Tudo" ? chipCounts.Tudo : f === "Memórias" ? chipCounts.Memórias : chipCounts.Capítulos;
-
-            return (
-              <button
-                key={f}
-                type="button"
-                style={{ ...styles.chip, ...(isActive ? styles.chipActive : {}) }}
-                onClick={() => setActiveFilter(f)}
-              >
-                {f}
-                <span style={styles.chipCount}>{count}</span>
+            <div className="hdud-actions">
+              <button className="hdud-btn" onClick={loadAll} disabled={loading || inventoryLoading}>
+                {loading || inventoryLoading ? "Atualizando…" : "Atualizar"}
               </button>
-            );
-          })}
-        </div>
-
-        <div style={styles.searchRow}>
-          <div style={{ flex: 1 }}>
-            <div style={styles.labelTop}>Buscar</div>
-            <input
-              style={styles.input}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Título, nota, id…"
-            />
-          </div>
-          <div style={styles.smallMuted}>Dica: ao buscar, mostramos só o estado atual (1 por memória/capítulo).</div>
-        </div>
-
-        {warnings.length > 0 && (
-          <div style={styles.warnBox}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Avisos</div>
-            {warnings.slice(0, 8).map((w, i) => (
-              <div key={`warn-${i}`}>• {w}</div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Events */}
-      <div style={styles.card}>
-        <div style={styles.rowBetween}>
-          <div>
-            <div style={styles.cardTitle}>Em ordem</div>
-            <div style={styles.cardMeta}>Do mais recente para o mais antigo, agrupados por dia.</div>
-          </div>
-          <div style={styles.smallMuted}>{loading ? "Carregando…" : "Ativa"}</div>
-        </div>
-
-        {errorMsg ? (
-          <div style={styles.errorBox}>
-            <div style={{ fontWeight: 900 }}>Não foi possível carregar a Timeline</div>
-            <div style={{ marginTop: 6, opacity: 0.85 }}>{errorMsg}</div>
-            <button type="button" style={{ ...styles.btn, marginTop: 12 }} onClick={loadAll}>
-              Tentar novamente
-            </button>
-          </div>
-        ) : loading ? (
-          <div style={styles.infoBox}>Carregando eventos…</div>
-        ) : filteredEvents.length === 0 ? (
-          <div style={styles.infoBox}>
-            <div style={{ fontWeight: 900 }}>Nada para mostrar</div>
-            <div style={{ marginTop: 6, opacity: 0.85 }}>
-              Ajuste filtro/busca, ou crie uma memória/capítulo para a timeline ganhar vida.
             </div>
           </div>
-        ) : (
-          <div style={{ marginTop: 12 }}>
-            {grouped.map((g) => (
-              <section key={g.day} style={{ marginTop: 16 }}>
-                <div style={styles.dayHeader}>
-                  <span style={styles.dayPill}>{g.day}</span>
-                  <span style={styles.smallMuted}>{g.list.length} item(ns)</span>
-                </div>
+        </div>
 
-                <div style={styles.dayList}>
-                  {g.list.map((it) => {
-                    const dt = safeDateParse(it.at);
-                    const time = dt ? formatTimeLabel(dt) : it.at;
-                    const rel = dt ? formatRelative(dt) : "";
-                    const note = it.note ? clampText(it.note, 220) : "";
-                    const isOpen = Boolean(openMap[it.id]);
+        {/* Filters + Search */}
+        <div className="hdud-card">
+          <div style={styles.rowBetween}>
+            <div>
+              <div style={styles.cardTitle}>Em foco</div>
+              <div style={styles.cardMeta}>Filtre por tipo, se quiser — a Timeline continua sendo uma linha única.</div>
+            </div>
 
-                    const target = extractTarget(it);
-                    const canOpen = Boolean(target.id) && (target.kind === "memory" || target.kind === "chapter");
+            <div style={styles.smallMuted}>
+              Eventos: <b>{filteredEvents.length}</b> / {displayEvents.length}
+              {inventoryLoading ? <span style={{ marginLeft: 8, opacity: 0.75 }}>• Inventário…</span> : null}
+            </div>
+          </div>
 
-                    const k = normalizeKind(it);
-                    const seal = labelForKind(k);
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+            {filters.map((f) => {
+              const isActive = f === activeFilter;
+              const count = f === "Tudo" ? chipCounts.Tudo : f === "Memórias" ? chipCounts.Memórias : chipCounts.Capítulos;
 
-                    const focusLabel = mapKindToFilter(k);
+              return (
+                <button
+                  key={f}
+                  type="button"
+                  style={{ ...styles.chip, ...(isActive ? styles.chipActive : {}) }}
+                  onClick={() => setActiveFilter(f)}
+                >
+                  {f}
+                  <span style={styles.chipCount}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
 
-                    const openLabel =
-                      target.kind === "memory"
-                        ? "Abrir memória"
-                        : target.kind === "chapter"
-                        ? "Abrir capítulo"
-                        : "Detalhes";
+          <div style={styles.searchRow}>
+            <div style={{ flex: 1, minWidth: 260 }}>
+              <div style={styles.labelTop}>Buscar</div>
+              <input className="hdud-input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Título, nota, id…" />
+            </div>
+            <div style={styles.smallMuted}>Dica: ao buscar, mostramos só o estado atual (1 por memória/capítulo).</div>
+          </div>
 
-                    return (
-                      <div
-                        key={it.id}
-                        style={styles.eventCard}
-                        onClick={() => openEvent(it)}
-                        title={canOpen ? "Clique para abrir" : "Clique para ver detalhes"}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") openEvent(it);
-                        }}
-                      >
-                        <div style={styles.eventTop}>
-                          <div style={styles.eventLeft}>
-                            <div style={styles.eventMetaRow}>
-                              <span style={styles.eventMeta}>
-                                {kindIcon(k)} <b>{time}</b> {rel ? <span style={{ opacity: 0.7 }}>({rel})</span> : null}
-                              </span>
+          {warnings.length > 0 && (
+            <div className="hdud-alert hdud-alert-warn" style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>Avisos</div>
+              {warnings.slice(0, 8).map((w, i) => (
+                <div key={`warn-${i}`}>• {w}</div>
+              ))}
+            </div>
+          )}
+        </div>
 
-                              <span style={styles.badgeSoftSmall}>
-                                <b>{seal}</b>
-                              </span>
+        {/* Events */}
+        <div className="hdud-card">
+          <div style={styles.rowBetween}>
+            <div>
+              <div style={styles.cardTitle}>Em ordem</div>
+              <div style={styles.cardMeta}>Do mais recente para o mais antigo, agrupados por dia.</div>
+            </div>
+            <div style={styles.smallMuted}>{loading ? "Carregando…" : "Ativa"}</div>
+          </div>
 
-                              {focusLabel ? (
+          {errorMsg ? (
+            <div className="hdud-alert hdud-alert-danger" style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 950 }}>Não foi possível carregar a Timeline</div>
+              <div style={{ marginTop: 6, opacity: 0.85 }}>{errorMsg}</div>
+              <button type="button" className="hdud-btn" style={{ marginTop: 12 }} onClick={loadAll}>
+                Tentar novamente
+              </button>
+            </div>
+          ) : loading ? (
+            <div className="hdud-alert" style={{ marginTop: 12 }}>
+              Carregando eventos…
+            </div>
+          ) : filteredEvents.length === 0 ? (
+            <div className="hdud-alert" style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 950 }}>Nada para mostrar</div>
+              <div style={{ marginTop: 6, opacity: 0.85 }}>
+                Ajuste filtro/busca, ou crie uma memória/capítulo para a timeline ganhar vida.
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginTop: 12 }}>
+              {grouped.map((g) => (
+                <section key={g.day} style={{ marginTop: 16 }}>
+                  <div style={styles.dayHeader}>
+                    <span style={styles.dayPill}>{g.day}</span>
+                    <span style={styles.smallMuted}>{g.list.length} item(ns)</span>
+                  </div>
+
+                  <div style={styles.dayList}>
+                    {g.list.map((it) => {
+                      const dt = safeDateParse(it.at);
+                      const time = dt ? formatTimeLabel(dt) : it.at;
+                      const rel = dt ? formatRelative(dt) : "";
+                      const note = it.note ? clampText(it.note, 220) : "";
+                      const isOpen = Boolean(openMap[it.id]);
+
+                      const target = extractTarget(it);
+
+                      const k = normalizeKind(it);
+                      const seal = labelForKind(k);
+
+                      const focusLabel = mapKindToFilter(k);
+
+                      const openLabel =
+                        target.kind === "memory" ? "Abrir memória" : target.kind === "chapter" ? "Abrir capítulo" : "Detalhes";
+
+                      return (
+                        <div
+                          key={it.id}
+                          style={styles.eventCard}
+                          onClick={() => openEvent(it)}
+                          title={target.id ? "Clique para abrir" : "Clique para ver detalhes"}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") openEvent(it);
+                          }}
+                        >
+                          <div style={styles.eventTop}>
+                            <div style={styles.eventLeft}>
+                              <div style={styles.eventMetaRow}>
+                                <span style={styles.eventMeta}>
+                                  {kindIcon(k)} <b>{time}</b> {rel ? <span style={{ opacity: 0.7 }}>({rel})</span> : null}
+                                </span>
+
+                                <span style={styles.badgeSoftSmall}>
+                                  <b>{seal}</b>
+                                </span>
+
+                                {focusLabel ? (
+                                  <button
+                                    type="button"
+                                    style={styles.badgeLink}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setActiveFilter(focusLabel);
+                                    }}
+                                    title="Filtrar por este tipo"
+                                  >
+                                    Ver só {focusLabel.toLowerCase()}
+                                  </button>
+                                ) : null}
+                              </div>
+
+                              <div style={styles.eventTitle}>{it.title || "(sem título)"}</div>
+
+                              {note ? <div style={styles.eventNote}>{note}</div> : null}
+
+                              <div style={styles.eventActions}>
                                 <button
                                   type="button"
-                                  style={styles.badgeLink}
+                                  className="hdud-btn hdud-btn-primary"
+                                  style={styles.btnMiniPrimary}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setActiveFilter(focusLabel);
+                                    openEvent(it);
                                   }}
-                                  title="Filtrar por este tipo"
                                 >
-                                  Ver só {focusLabel.toLowerCase()}
+                                  {openLabel}
                                 </button>
-                              ) : null}
+
+                                <button
+                                  type="button"
+                                  className="hdud-btn"
+                                  style={styles.btnMini}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleOpen(it.id);
+                                  }}
+                                >
+                                  {isOpen ? "Ocultar" : "Ver"} detalhes
+                                </button>
+                              </div>
                             </div>
 
-                            <div style={styles.eventTitle}>{it.title || "(sem título)"}</div>
-
-                            {note ? <div style={styles.eventNote}>{note}</div> : null}
-
-                            <div style={styles.eventActions}>
-                              <button
-                                type="button"
-                                style={styles.btnMiniPrimary}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openEvent(it);
-                                }}
-                              >
-                                {openLabel}
-                              </button>
-
-                              <button
-                                type="button"
-                                style={styles.btnMini}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleOpen(it.id);
-                                }}
-                              >
-                                {isOpen ? "Ocultar" : "Ver"} detalhes
-                              </button>
-                            </div>
+                            <div style={styles.kindPill}>{seal}</div>
                           </div>
 
-                          <div style={styles.kindPill}>{seal}</div>
+                          {isOpen && (
+                            <div style={styles.detailsBox} onClick={(e) => e.stopPropagation()}>
+                              <div style={{ fontWeight: 950, marginBottom: 6 }}>Detalhes do evento</div>
+                              <div style={styles.smallMuted}>
+                                target: <b>{target.kind}:{target.id ?? "—"}</b>
+                              </div>
+                              <div style={{ marginTop: 8, opacity: 0.85 }}>
+                                <pre style={styles.pre}>{JSON.stringify(it.raw ?? null, null, 2)}</pre>
+                              </div>
+                            </div>
+                          )}
                         </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
 
-                        {isOpen && (
-                          <div style={styles.detailsBox} onClick={(e) => e.stopPropagation()}>
-                            <div style={{ fontWeight: 900, marginBottom: 6 }}>Detalhes do evento</div>
-                            <div style={styles.smallMuted}>
-                              target: <b>{target.kind}:{target.id ?? "—"}</b>
-                            </div>
-                            <div style={{ marginTop: 8, opacity: 0.85 }}>
-                              <pre style={styles.pre}>{JSON.stringify(it.raw ?? null, null, 2)}</pre>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
+          <div style={styles.footerNote}>
+            Observação: esta tela <b>consome</b> <code>/timeline</code> para eventos, e consulta <b>inventário real</b> em{" "}
+            <code>/api/*</code> para os contadores (Memórias/Capítulos). Ao buscar, mostramos apenas o estado atual. A UI não
+            renderiza cards de “Versão”.
           </div>
-        )}
-
-        <div style={styles.footerNote}>
-          Observação: esta tela <b>consome</b> <code>/timeline</code> para eventos, e consulta <b>inventário real</b> em{" "}
-          <code>/api/*</code> para os contadores (Memórias/Capítulos). Ao buscar, mostramos apenas o estado atual. A UI não
-          renderiza cards de “Versão”.
         </div>
       </div>
     </div>
@@ -1013,33 +975,6 @@ export default function TimelinePage() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  page: { padding: 18, color: "var(--hdud-text)" },
-
-  card: {
-    background: "var(--hdud-card)",
-    borderRadius: 14,
-    padding: 16,
-    boxShadow: "var(--hdud-shadow)",
-    border: "1px solid var(--hdud-border)",
-    marginBottom: 14,
-  },
-
-  headerRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 14,
-    alignItems: "flex-start",
-  },
-  headerActions: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    flexWrap: "wrap",
-  },
-
-  h1: { fontSize: 28, fontWeight: 900, letterSpacing: -0.4, marginBottom: 6 },
-  sub: { opacity: 0.78, fontSize: 13, lineHeight: 1.35 },
-
   badgeRow: {
     marginTop: 10,
     display: "flex",
@@ -1049,7 +984,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   badgeSoft: {
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 900,
     padding: "6px 10px",
     borderRadius: 999,
     background: "var(--hdud-surface-2)",
@@ -1059,7 +994,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   badgeSoftSmall: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 950,
     padding: "4px 8px",
     borderRadius: 999,
     background: "var(--hdud-surface-2)",
@@ -1070,7 +1005,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   badgeLink: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 950,
     padding: "4px 8px",
     borderRadius: 999,
     background: "transparent",
@@ -1081,32 +1016,18 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
 
-  btn: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    color: "var(--hdud-text)",
-    padding: "8px 12px",
-    borderRadius: 10,
-    cursor: "pointer",
-    fontWeight: 800,
-  },
-  btnDisabled: { opacity: 0.55, cursor: "not-allowed" },
-
   btnGhost: {
-    border: "1px solid var(--hdud-border)",
-    background: "transparent",
-    color: "var(--hdud-text)",
-    padding: "6px 10px",
     borderRadius: 999,
-    cursor: "pointer",
-    fontWeight: 800,
+    padding: "6px 10px",
     fontSize: 12,
+    fontWeight: 900,
     opacity: 0.78,
+    background: "transparent",
   },
 
   diagBox: {
     marginTop: 10,
-    border: "1px solid var(--hdud-border)",
+    border: "1px dashed var(--hdud-border)",
     background: "var(--hdud-surface-2)",
     borderRadius: 12,
     padding: 10,
@@ -1121,7 +1042,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "flex-start",
     flexWrap: "wrap",
   },
-  cardTitle: { fontWeight: 900, fontSize: 14 },
+  cardTitle: { fontWeight: 950, fontSize: 14 },
   cardMeta: { fontSize: 12, opacity: 0.72, marginTop: 4 },
   smallMuted: { fontSize: 12, opacity: 0.7 },
 
@@ -1132,7 +1053,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "7px 10px",
     borderRadius: 999,
     cursor: "pointer",
-    fontWeight: 900,
+    fontWeight: 950,
     fontSize: 12,
     display: "inline-flex",
     gap: 8,
@@ -1142,7 +1063,7 @@ const styles: Record<string, React.CSSProperties> = {
   chipActive: { opacity: 1, outline: "2px solid var(--hdud-accent-border)" },
   chipCount: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 950,
     padding: "2px 8px",
     borderRadius: 999,
     border: "1px solid var(--hdud-border)",
@@ -1159,44 +1080,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "flex-end",
     flexWrap: "wrap",
   },
-  labelTop: { fontSize: 12, fontWeight: 900, opacity: 0.85, marginBottom: 6 },
-  input: {
-    width: "100%",
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    color: "var(--hdud-text)",
-    borderRadius: 10,
-    padding: "10px 12px",
-    fontSize: 13,
-    outline: "none",
-  },
-
-  warnBox: {
-    marginTop: 12,
-    border: "1px dashed var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    borderRadius: 12,
-    padding: 10,
-    fontSize: 12,
-    opacity: 0.9,
-  },
-
-  errorBox: {
-    marginTop: 12,
-    border: "1px solid rgba(255,0,80,0.22)",
-    background: "rgba(255,0,80,0.10)",
-    borderRadius: 12,
-    padding: 14,
-  },
-  infoBox: {
-    marginTop: 12,
-    border: "1px dashed var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 12,
-    opacity: 0.92,
-  },
+  labelTop: { fontSize: 12, fontWeight: 950, opacity: 0.85, marginBottom: 6 },
 
   dayHeader: {
     display: "flex",
@@ -1207,7 +1091,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   dayPill: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 950,
     padding: "6px 10px",
     borderRadius: 999,
     border: "1px solid var(--hdud-border)",
@@ -1225,7 +1109,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 14,
     padding: 12,
     cursor: "pointer",
-    boxShadow: "var(--hdud-shadow-soft)",
+    boxShadow: "var(--hdud-shadow)",
   },
   eventTop: {
     display: "flex",
@@ -1246,14 +1130,14 @@ const styles: Record<string, React.CSSProperties> = {
   eventTitle: {
     marginTop: 6,
     fontSize: 14,
-    fontWeight: 900,
+    fontWeight: 950,
     lineHeight: 1.25,
   },
   eventNote: { marginTop: 6, fontSize: 12, opacity: 0.82, lineHeight: 1.35 },
 
   kindPill: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 950,
     padding: "5px 10px",
     borderRadius: 999,
     border: "1px solid var(--hdud-border)",
@@ -1263,27 +1147,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   eventActions: { marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" },
-  btnMiniPrimary: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-primary-bg)",
-    color: "var(--hdud-primary-text)",
-    padding: "7px 10px",
-    borderRadius: 10,
-    cursor: "pointer",
-    fontWeight: 900,
-    fontSize: 12,
-  },
-  btnMini: {
-    border: "1px solid var(--hdud-border)",
-    background: "transparent",
-    color: "var(--hdud-text)",
-    padding: "7px 10px",
-    borderRadius: 10,
-    cursor: "pointer",
-    fontWeight: 900,
-    fontSize: 12,
-    opacity: 0.85,
-  },
+  btnMiniPrimary: { padding: "7px 10px", borderRadius: 10, fontWeight: 950, fontSize: 12 },
+  btnMini: { padding: "7px 10px", borderRadius: 10, fontWeight: 950, fontSize: 12, opacity: 0.9 },
 
   detailsBox: {
     marginTop: 12,

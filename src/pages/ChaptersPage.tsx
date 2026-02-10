@@ -21,6 +21,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * ✅ FECHAMENTO “chave de ouro”:
  * (1) Dirty Guard: evita perder texto em demo (prompt ao trocar de capítulo / sair / recarregar).
  * (3) 401 redirect: token expirado -> limpa token + manda para /login com retorno.
+ *
+ * ✅ FIX (dirty fantasma / corrida):
+ * - Request-id guard: ignora respostas velhas (loadList/loadDetail concorrentes).
+ * - isDirty = false durante loading/saving (evita prompt durante sincronização).
+ *
+ * ✅ FIX (dirty fantasma por normalização):
+ * - Normaliza CRLF/LF + trailing spaces + newline final antes de comparar snapshot.
  */
 
 type ChapterStatus = "DRAFT" | "PUBLIC";
@@ -77,17 +84,17 @@ function toStatus(v: any): ChapterStatus {
 function unwrapList(data: any): ApiChapterListItem[] | null {
   if (!data) return null;
   if (Array.isArray(data)) return data as ApiChapterListItem[];
-  if (Array.isArray(data.chapters)) return data.chapters as ApiChapterListItem[];
-  if (Array.isArray(data.items)) return data.items as ApiChapterListItem[];
-  if (data.data && Array.isArray(data.data.chapters)) return data.data.chapters as ApiChapterListItem[];
-  if (data.data && Array.isArray(data.data.items)) return data.data.items as ApiChapterListItem[];
+  if (Array.isArray((data as any).chapters)) return (data as any).chapters as ApiChapterListItem[];
+  if (Array.isArray((data as any).items)) return (data as any).items as ApiChapterListItem[];
+  if ((data as any).data && Array.isArray((data as any).data.chapters)) return (data as any).data.chapters as ApiChapterListItem[];
+  if ((data as any).data && Array.isArray((data as any).data.items)) return (data as any).data.items as ApiChapterListItem[];
   return null;
 }
 
 function unwrapDetail(data: any): ApiChapterDetail | null {
   if (!data) return null;
-  if (data.chapter) return data.chapter as ApiChapterDetail; // shape { chapter, current_version }
-  if (data.data && data.data.chapter) return data.data.chapter as ApiChapterDetail;
+  if ((data as any).chapter) return (data as any).chapter as ApiChapterDetail; // shape { chapter, current_version }
+  if ((data as any).data && (data as any).data.chapter) return (data as any).data.chapter as ApiChapterDetail;
   return data as ApiChapterDetail;
 }
 
@@ -128,7 +135,10 @@ function parseJwtPayload(token: string): any | null {
 
 function redirectToLogin(reason?: string) {
   try {
-    sessionStorage.setItem("hdud_after_login_path", window.location.pathname + window.location.search + window.location.hash);
+    sessionStorage.setItem(
+      "hdud_after_login_path",
+      window.location.pathname + window.location.search + window.location.hash
+    );
     if (reason) sessionStorage.setItem("hdud_login_reason", reason);
   } catch {}
   try {
@@ -188,7 +198,6 @@ async function tryMany<T>(
       attempts.push({ path: r.usedPath, status: r.status, ok: r.ok });
       last = { ...r, usedIndex: i };
       if (r.ok) return { ...last, attempts };
-      // ✅ se for 401, apiRequest já redirecionou; ainda assim devolvemos
       if (r.status === 401) return { ...last, attempts };
     } catch {
       // ignora e tenta a próxima
@@ -230,6 +239,55 @@ function consumeOpenChapterHint(): number | null {
 
 type Snapshot = { title: string; description: string; body: string; status: ChapterStatus };
 
+// =======================
+// Normalização (evita dirty fantasma)
+// =======================
+function normText(v: any): string {
+  const s = String(v ?? "");
+  const noBom = s.replace(/^\uFEFF/, "");
+  const lf = noBom.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const trimLineEnds = lf.replace(/[ \t]+$/gm, "");
+  const trimEndNewlines = trimLineEnds.replace(/\n+$/g, "\n"); // no máximo 1 newline final
+  return trimEndNewlines;
+}
+function normTitle(v: any): string {
+  return String(v ?? "");
+}
+function normDesc(v: any): string {
+  return String(v ?? "");
+}
+function normSnap(s: Snapshot): Snapshot {
+  return {
+    title: normTitle(s.title),
+    description: normDesc(s.description),
+    body: normText(s.body),
+    status: s.status,
+  };
+}
+
+// diagnóstico do dirty
+function diffDirty(current: Snapshot, snap: Snapshot) {
+  const diffs: string[] = [];
+  if (current.title !== snap.title) diffs.push(`title (${current.title.length} vs ${snap.title.length})`);
+  if (current.description !== snap.description) diffs.push(`description (${current.description.length} vs ${snap.description.length})`);
+  if (current.status !== snap.status) diffs.push(`status (${current.status} vs ${snap.status})`);
+
+  if (current.body !== snap.body) {
+    const a = current.body;
+    const b = snap.body;
+    const min = Math.min(a.length, b.length);
+    let i = 0;
+    for (; i < min; i++) {
+      if (a.charCodeAt(i) !== b.charCodeAt(i)) break;
+    }
+    const tailA = a.slice(Math.max(0, a.length - 20)).replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+    const tailB = b.slice(Math.max(0, b.length - 20)).replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+    diffs.push(`body (len ${a.length} vs ${b.length}, firstDiffAt ${i}, tail "${tailA}" vs "${tailB}")`);
+  }
+
+  return diffs;
+}
+
 export default function ChaptersPage() {
   // ✅ token/authorId NÃO congelados: acompanham login/renovação
   const token = getToken();
@@ -262,21 +320,20 @@ export default function ChaptersPage() {
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<any>(null);
 
-  // diagnóstico leve (sem mexer no core): mostra qual rota funcionou / falhou
+  // diagnóstico leve
   const [lastApiInfo, setLastApiInfo] = useState<string>("");
-
-  // ✅ UX: debug colapsável (não polui a “cara de produto”)
   const [showDiag, setShowDiag] = useState<boolean>(false);
 
-  // Home mental: pequena busca local (não toca API, só filtra lista)
   const [q, setQ] = useState<string>("");
 
-  // ✅ controle: só limpa template no 1º foco (evita “não limpa quando digito”)
   const didFocusTitle = useRef(false);
   const didFocusDesc = useRef(false);
 
-  // ✅ deep-link: capítulo a abrir automaticamente (vem da Timeline)
   const pendingOpenChapterIdRef = useRef<number | null>(consumeOpenChapterHint());
+
+  // ✅ request-id guard (mata corrida)
+  const listSeqRef = useRef(0);
+  const detailSeqRef = useRef(0);
 
   // =======================
   // Dirty Guard
@@ -284,25 +341,36 @@ export default function ChaptersPage() {
   const snapshotRef = useRef<Snapshot | null>(null);
 
   const isDirty = useMemo(() => {
+    // 🔥 regra de ouro: durante loading/saving não tem prompt
+    if (loading || saving) return false;
+
     const snap = snapshotRef.current;
     if (!snap) return false;
-    return (
-      String(title ?? "") !== snap.title ||
-      String(description ?? "") !== snap.description ||
-      String(body ?? "") !== snap.body ||
-      (status as ChapterStatus) !== snap.status
-    );
-  }, [title, description, body, status]);
 
-  function resetSnapshot(next?: Partial<Snapshot>) {
-    const base: Snapshot = {
-      title: String(title ?? ""),
-      description: String(description ?? ""),
-      body: String(body ?? ""),
+    const a: Snapshot = {
+      title: normTitle(title),
+      description: normDesc(description),
+      body: normText(body),
       status: status as ChapterStatus,
     };
-    snapshotRef.current = { ...base, ...(next ?? {}) };
-  }
+    const b = normSnap(snap);
+
+    return a.title !== b.title || a.description !== b.description || a.body !== b.body || a.status !== b.status;
+  }, [title, description, body, status, loading, saving]);
+
+  const dirtyInfo = useMemo(() => {
+    const snap = snapshotRef.current;
+    if (!snap) return "snapshot: null";
+    const cur: Snapshot = {
+      title: normTitle(title),
+      description: normDesc(description),
+      body: normText(body),
+      status: status as ChapterStatus,
+    };
+    const b = normSnap(snap);
+    const diffs = diffDirty(cur, b);
+    return diffs.length ? diffs.join(" | ") : "OK (no diffs)";
+  }, [title, description, body, status]);
 
   function confirmIfDirty(actionLabel: string): boolean {
     if (!isDirty) return true;
@@ -315,12 +383,10 @@ export default function ChaptersPage() {
     }
   }
 
-  // ✅ se tentar fechar/atualizar aba com mudanças
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (!isDirty) return;
       e.preventDefault();
-      // Chrome ignora texto custom; precisa setar returnValue
       (e as any).returnValue = "";
       return "";
     };
@@ -328,8 +394,6 @@ export default function ChaptersPage() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [isDirty]);
 
-  // ✅ melhora: se a Timeline setar o hint e navegar, ok. Se por algum motivo setar
-  // enquanto a página já está aberta, este listener captura.
   useEffect(() => {
     try {
       const onStorage = (e: StorageEvent) => {
@@ -362,7 +426,6 @@ export default function ChaptersPage() {
   }
 
   function needAuthGuard(): boolean {
-    // ✅ sempre lê token atual (evita “stale token”)
     const t = getToken();
     if (!t) {
       setToastAuto({ kind: "warn", msg: "Token ausente. Faça login para ver/editar capítulos." });
@@ -384,147 +447,159 @@ export default function ChaptersPage() {
   async function loadList() {
     if (needAuthGuard()) return;
 
+    const seq = ++listSeqRef.current;
+
     setLoading(true);
     setToast(null);
 
-    const result = await tryMany<any>([
-      () => apiRequest<any>("/api/chapters", { method: "GET" }),
-      () => apiRequest<any>("/api/chapter", { method: "GET" }),
-      () => apiRequest<any>("/api/chapters/list", { method: "GET" }),
-      () => apiRequest<any>("/api/chapter/list", { method: "GET" }),
-      () => apiRequest<any>(`/api/authors/${authorId}/chapters`, { method: "GET" }),
-      () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "GET" }),
-    ]);
+    try {
+      const result = await tryMany<any>([
+        () => apiRequest<any>("/api/chapters", { method: "GET" }),
+        () => apiRequest<any>("/api/chapter", { method: "GET" }),
+        () => apiRequest<any>("/api/chapters/list", { method: "GET" }),
+        () => apiRequest<any>("/api/chapter/list", { method: "GET" }),
+        () => apiRequest<any>(`/api/authors/${authorId}/chapters`, { method: "GET" }),
+        () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "GET" }),
+      ]);
 
-    setLoading(false);
-    setApiInfo("LIST", result.usedPath || "—", result.attempts);
+      if (seq !== listSeqRef.current) return; // ✅ resposta velha
 
-    const list = unwrapList(result.data);
+      setApiInfo("LIST", result.usedPath || "—", result.attempts);
 
-    if (!result.ok || !list) {
-      const hint =
-        result.status === 401
-          ? "401 (token expirado). Faça login novamente."
-          : result.status === 404
-          ? "404 (rota não existe no backend)."
-          : `HTTP ${result.status || "erro"}`;
+      const list = unwrapList(result.data);
 
-      setToastAuto({ kind: "err", msg: `Falha ao carregar capítulos (${hint}).` });
-      return;
-    }
+      if (!result.ok || !list) {
+        const hint =
+          result.status === 401
+            ? "401 (token expirado). Faça login novamente."
+            : result.status === 404
+            ? "404 (rota não existe no backend)."
+            : `HTTP ${result.status || "erro"}`;
 
-    const normalized = list
-      .map((x: any) => ({
-        chapter_id: Number(x.chapter_id ?? x.id ?? x.chapterId),
-        author_id: Number(x.author_id ?? x.authorId ?? authorId),
-        title: String(x.title ?? ""),
-        description: x.description != null ? String(x.description) : null,
-        status: toStatus(x.status),
-        current_version_id:
-          x.current_version_id != null
-            ? Number(x.current_version_id)
-            : x.currentVersionId != null
-            ? Number(x.currentVersionId)
-            : null,
-        created_at: String(x.created_at ?? x.createdAt ?? ""),
-        updated_at: String(x.updated_at ?? x.updatedAt ?? ""),
-        published_at: x.published_at != null ? String(x.published_at) : x.publishedAt != null ? String(x.publishedAt) : null,
-      }))
-      .filter((x) => Number.isFinite(x.chapter_id) && x.chapter_id > 0);
-
-    setItems(normalized);
-
-    // ✅ prioridade: se veio deep-link da Timeline, abre esse capítulo
-    const pending = pendingOpenChapterIdRef.current;
-    if (pending) {
-      const exists = normalized.some((c) => c.chapter_id === pending);
-      if (exists) {
-        if (!confirmIfDirty("Abrir capítulo vindo da Timeline")) {
-          setToastAuto({ kind: "warn", msg: "Você está com alterações não salvas. Salve antes de abrir outro capítulo." });
-          pendingOpenChapterIdRef.current = null;
-          return;
-        }
-        pendingOpenChapterIdRef.current = null;
-        await loadDetail(pending);
-        // UX: garante que o editor fique visível
-        try {
-          window.scrollTo({ top: 0, behavior: "smooth" });
-        } catch {}
+        setToastAuto({ kind: "err", msg: `Falha ao carregar capítulos (${hint}).` });
         return;
-      } else {
-        // se não existir, seguimos fallback normal
-        pendingOpenChapterIdRef.current = null;
       }
-    }
 
-    // fallback: se nada selecionado ainda, abre o primeiro
-    if (!selectedChapterId && normalized.length > 0) {
-      if (!isDirty) void loadDetail(normalized[0].chapter_id);
+      const normalized = list
+        .map((x: any) => ({
+          chapter_id: Number(x.chapter_id ?? x.id ?? x.chapterId),
+          author_id: Number(x.author_id ?? x.authorId ?? authorId),
+          title: String(x.title ?? ""),
+          description: x.description != null ? String(x.description) : null,
+          status: toStatus(x.status),
+          current_version_id:
+            x.current_version_id != null
+              ? Number(x.current_version_id)
+              : x.currentVersionId != null
+              ? Number(x.currentVersionId)
+              : null,
+          created_at: String(x.created_at ?? x.createdAt ?? ""),
+          updated_at: String(x.updated_at ?? x.updatedAt ?? ""),
+          published_at:
+            x.published_at != null ? String(x.published_at) : x.publishedAt != null ? String(x.publishedAt) : null,
+        }))
+        .filter((x) => Number.isFinite(x.chapter_id) && x.chapter_id > 0);
+
+      setItems(normalized);
+
+      // ✅ prioridade: deep-link da Timeline
+      const pending = pendingOpenChapterIdRef.current;
+      if (pending) {
+        const exists = normalized.some((c) => c.chapter_id === pending);
+        if (exists) {
+          if (!confirmIfDirty("Abrir capítulo vindo da Timeline")) {
+            setToastAuto({
+              kind: "warn",
+              msg: "Você está com alterações não salvas. Salve antes de abrir outro capítulo.",
+            });
+            pendingOpenChapterIdRef.current = null;
+            return;
+          }
+          pendingOpenChapterIdRef.current = null;
+          await loadDetail(pending);
+          try {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          } catch {}
+          return;
+        } else {
+          pendingOpenChapterIdRef.current = null;
+        }
+      }
+
+      // seleção inicial (só se nada selecionado)
+      if (!selectedChapterId && normalized.length > 0) {
+        void loadDetail(normalized[0].chapter_id);
+      }
+    } finally {
+      if (seq === listSeqRef.current) setLoading(false);
     }
   }
 
   async function loadDetail(chapterId: number) {
     if (needAuthGuard()) return;
 
+    const seq = ++detailSeqRef.current;
+
     setLoading(true);
     setToast(null);
 
-    const result = await tryMany<any>([
-      () => apiRequest<any>(`/api/chapters/${chapterId}`, { method: "GET" }),
-      () => apiRequest<any>(`/api/chapter/${chapterId}`, { method: "GET" }),
-      () => apiRequest<any>(`/api/authors/${authorId}/chapters/${chapterId}`, { method: "GET" }),
-      () => apiRequest<any>(`/api/author/${authorId}/chapters/${chapterId}`, { method: "GET" }),
-    ]);
+    try {
+      const result = await tryMany<any>([
+        () => apiRequest<any>(`/api/chapters/${chapterId}`, { method: "GET" }),
+        () => apiRequest<any>(`/api/chapter/${chapterId}`, { method: "GET" }),
+        () => apiRequest<any>(`/api/authors/${authorId}/chapters/${chapterId}`, { method: "GET" }),
+        () => apiRequest<any>(`/api/author/${authorId}/chapters/${chapterId}`, { method: "GET" }),
+      ]);
 
-    setLoading(false);
-    setApiInfo("DETAIL", result.usedPath || "—", result.attempts);
+      if (seq !== detailSeqRef.current) return; // ✅ resposta velha
 
-    const d = unwrapDetail(result.data);
+      setApiInfo("DETAIL", result.usedPath || "—", result.attempts);
 
-    if (!result.ok || !d) {
-      const hint =
-        result.status === 401
-          ? "401 (token expirado). Faça login novamente."
-          : result.status === 404
-          ? "404 (rota não existe / id não encontrado)."
-          : `HTTP ${result.status || "erro"}`;
+      const d = unwrapDetail(result.data);
 
-      setToastAuto({ kind: "err", msg: `Falha ao abrir capítulo (${hint}).` });
-      return;
+      if (!result.ok || !d) {
+        const hint =
+          result.status === 401
+            ? "401 (token expirado). Faça login novamente."
+            : result.status === 404
+            ? "404 (rota não existe / id não encontrado)."
+            : `HTTP ${result.status || "erro"}`;
+
+        setToastAuto({ kind: "err", msg: `Falha ao abrir capítulo (${hint}).` });
+        return;
+      }
+
+      const nextId = Number(d.chapter_id);
+      const nextTitle = String(d.title ?? "");
+      const nextDesc = String(d.description ?? "");
+      const nextStatus = toStatus(d.status);
+
+      const v =
+        d.current_version_id && Number.isFinite(Number(d.current_version_id)) ? `v${Number(d.current_version_id)}` : "v1";
+
+      const fromCurrent = (result.data as any)?.current_version?.body;
+      const flat = typeof (d as any).body === "string" ? (d as any).body : null;
+      const nextBody = typeof fromCurrent === "string" ? fromCurrent : flat !== null ? flat : "";
+
+      // aplica state
+      setSelectedChapterId(nextId);
+      setTitle(nextTitle);
+      setDescription(nextDesc);
+      setStatus(nextStatus);
+      setVersionLabel(v);
+      setCreatedAt(formatDateBR(d.created_at));
+      setUpdatedAt(formatDateBR(d.updated_at));
+      setPublishedAt(d.published_at ? formatDateBR(d.published_at) : "—");
+      setBody(nextBody);
+
+      didFocusTitle.current = false;
+      didFocusDesc.current = false;
+
+      // ✅ snapshot SEMPRE derivado dos mesmos valores aplicados acima
+      snapshotRef.current = normSnap({ title: nextTitle, description: nextDesc, body: nextBody, status: nextStatus });
+    } finally {
+      if (seq === detailSeqRef.current) setLoading(false);
     }
-
-    setSelectedChapterId(Number(d.chapter_id));
-    const nextTitle = String(d.title ?? "");
-    const nextDesc = String(d.description ?? "");
-    setTitle(nextTitle);
-    setDescription(nextDesc);
-    const nextStatus = toStatus(d.status);
-    setStatus(nextStatus);
-
-    const v =
-      d.current_version_id && Number.isFinite(Number(d.current_version_id))
-        ? `v${Number(d.current_version_id)}`
-        : "v1";
-    setVersionLabel(v);
-
-    setCreatedAt(formatDateBR(d.created_at));
-    setUpdatedAt(formatDateBR(d.updated_at));
-    setPublishedAt(d.published_at ? formatDateBR(d.published_at) : "—");
-
-    const fromCurrent = (result.data as any)?.current_version?.body;
-    const flat = typeof d.body === "string" ? d.body : null;
-
-    const nextBody =
-      typeof fromCurrent === "string" ? fromCurrent : flat !== null ? flat : "";
-
-    setBody(nextBody);
-
-    // ✅ importante: ao trocar de capítulo, “reseta” a lógica do template
-    didFocusTitle.current = false;
-    didFocusDesc.current = false;
-
-    // ✅ snapshot (dirty guard): capítulo carregado = estado limpo
-    snapshotRef.current = { title: nextTitle, description: nextDesc, body: nextBody, status: nextStatus };
   }
 
   async function createChapter() {
@@ -534,49 +609,52 @@ export default function ChaptersPage() {
     setSaving(true);
     setToast(null);
 
-    const payload = {
-      title: DEFAULT_NEW_TITLE,
-      description: DEFAULT_NEW_DESCRIPTION,
-      body: "",
-      status: "DRAFT",
-    };
+    try {
+      const payload = {
+        title: DEFAULT_NEW_TITLE,
+        description: DEFAULT_NEW_DESCRIPTION,
+        body: "",
+        status: "DRAFT",
+      };
 
-    const result = await tryMany<any>([
-      () => apiRequest<any>("/api/chapters", { method: "POST", body: JSON.stringify(payload) }),
-      () => apiRequest<any>("/api/chapter", { method: "POST", body: JSON.stringify(payload) }),
-      () => apiRequest<any>(`/api/authors/${authorId}/chapters`, { method: "POST", body: JSON.stringify(payload) }),
-      () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "POST", body: JSON.stringify(payload) }),
-    ]);
+      const result = await tryMany<any>([
+        () => apiRequest<any>("/api/chapters", { method: "POST", body: JSON.stringify(payload) }),
+        () => apiRequest<any>("/api/chapter", { method: "POST", body: JSON.stringify(payload) }),
+        () => apiRequest<any>(`/api/authors/${authorId}/chapters`, { method: "POST", body: JSON.stringify(payload) }),
+        () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "POST", body: JSON.stringify(payload) }),
+      ]);
 
-    setSaving(false);
-    setApiInfo("CREATE", result.usedPath || "—", result.attempts);
+      setApiInfo("CREATE", result.usedPath || "—", result.attempts);
 
-    if (!result.ok) {
-      const hint =
-        result.status === 401
-          ? "401 (token expirado). Faça login novamente."
-          : result.status === 404
-          ? "404 (rota de criação não existe no backend)."
-          : `HTTP ${result.status || "erro"}`;
+      if (!result.ok) {
+        const hint =
+          result.status === 401
+            ? "401 (token expirado). Faça login novamente."
+            : result.status === 404
+            ? "404 (rota de criação não existe no backend)."
+            : `HTTP ${result.status || "erro"}`;
 
-      setToastAuto({ kind: "err", msg: `Erro ao criar capítulo (${hint}).` });
-      return;
-    }
+        setToastAuto({ kind: "err", msg: `Erro ao criar capítulo (${hint}).` });
+        return;
+      }
 
-    setToastAuto({ kind: "ok", msg: "Capítulo criado (rascunho)." });
+      setToastAuto({ kind: "ok", msg: "Capítulo criado (rascunho)." });
 
-    await loadList();
+      await loadList();
 
-    const createdId =
-      (result.data as any)?.chapter_id ??
-      (result.data as any)?.id ??
-      (result.data as any)?.chapter?.chapter_id ??
-      (result.data as any)?.data?.chapter_id ??
-      null;
+      const createdId =
+        (result.data as any)?.chapter_id ??
+        (result.data as any)?.id ??
+        (result.data as any)?.chapter?.chapter_id ??
+        (result.data as any)?.data?.chapter_id ??
+        null;
 
-    const cid = Number(createdId);
-    if (Number.isFinite(cid) && cid > 0) {
-      await loadDetail(cid);
+      const cid = Number(createdId);
+      if (Number.isFinite(cid) && cid > 0) {
+        await loadDetail(cid);
+      }
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -593,56 +671,64 @@ export default function ChaptersPage() {
     setSaving(true);
     setToast(null);
 
-    const payload = {
-      title: t,
-      description: safeTrimOrNull(description),
-      body: String(body ?? ""),
-    };
+    try {
+      const payload = {
+        title: t,
+        description: safeTrimOrNull(description),
+        body: String(body ?? ""),
+      };
 
-    const result = await tryMany<any>([
-      () => apiRequest<any>(`/api/chapters/${selectedChapterId}`, { method: "PUT", body: JSON.stringify(payload) }),
-      () => apiRequest<any>(`/api/chapter/${selectedChapterId}`, { method: "PUT", body: JSON.stringify(payload) }),
-      () =>
-        apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}`, {
-          method: "PUT",
-          body: JSON.stringify(payload),
-        }),
-      () =>
-        apiRequest<any>(`/api/author/${authorId}/chapters/${selectedChapterId}`, {
-          method: "PUT",
-          body: JSON.stringify(payload),
-        }),
-    ]);
+      const result = await tryMany<any>([
+        () => apiRequest<any>(`/api/chapters/${selectedChapterId}`, { method: "PUT", body: JSON.stringify(payload) }),
+        () => apiRequest<any>(`/api/chapter/${selectedChapterId}`, { method: "PUT", body: JSON.stringify(payload) }),
+        () =>
+          apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
+          }),
+        () =>
+          apiRequest<any>(`/api/author/${authorId}/chapters/${selectedChapterId}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
+          }),
+      ]);
 
-    setSaving(false);
-    setApiInfo("SAVE", result.usedPath || "—", result.attempts);
+      setApiInfo("SAVE", result.usedPath || "—", result.attempts);
 
-    if (!result.ok) {
-      const hint =
-        result.status === 401
-          ? "401 (token expirado). Faça login novamente."
-          : result.status === 404
-          ? "404 (rota de update não existe no backend)."
-          : `HTTP ${result.status || "erro"}`;
+      if (!result.ok) {
+        const hint =
+          result.status === 401
+            ? "401 (token expirado). Faça login novamente."
+            : result.status === 404
+            ? "404 (rota de update não existe no backend)."
+            : `HTTP ${result.status || "erro"}`;
 
-      setToastAuto({ kind: "err", msg: `Falha ao salvar (${hint}).` });
-      return;
+        setToastAuto({ kind: "err", msg: `Falha ao salvar (${hint}).` });
+        return;
+      }
+
+      // ✅ snapshot imediato do que está na tela (normalizado)
+      snapshotRef.current = normSnap({
+        title: t,
+        description: String(description ?? ""),
+        body: String(body ?? ""),
+        status,
+      });
+
+      setToastAuto({ kind: "ok", msg: "Salvo." });
+
+      // resync (sem gerar dirty)
+      await loadList();
+      await loadDetail(selectedChapterId);
+    } finally {
+      setSaving(false);
     }
-
-    setToastAuto({ kind: "ok", msg: "Salvo." });
-
-    // ✅ após salvar, atualiza snapshot (estado limpo)
-    resetSnapshot({ title: t, description: String(description ?? ""), body: String(body ?? ""), status });
-
-    await loadList();
-    await loadDetail(selectedChapterId);
   }
 
   async function publishChapter() {
     if (!selectedChapterId) return;
     if (needAuthGuard()) return;
 
-    // publicar muda status/flow: se tiver dirty, força salvar antes (evita publicar “sem o texto”)
     if (isDirty) {
       setToastAuto({ kind: "warn", msg: "Você tem alterações não salvas. Salve antes de publicar." });
       return;
@@ -651,40 +737,43 @@ export default function ChaptersPage() {
     setSaving(true);
     setToast(null);
 
-    const result = await tryMany<any>([
-      () => apiRequest<any>(`/api/chapters/${selectedChapterId}/publish`, { method: "POST" }),
-      () => apiRequest<any>(`/api/chapter/${selectedChapterId}/publish`, { method: "POST" }),
-      () => apiRequest<any>(`/api/chapters/${selectedChapterId}/publicar`, { method: "POST" }),
-      () => apiRequest<any>(`/api/chapter/${selectedChapterId}/publicar`, { method: "POST" }),
-      () =>
-        apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}/publish`, {
-          method: "POST",
-        }),
-      () =>
-        apiRequest<any>(`/api/author/${authorId}/chapters/${selectedChapterId}/publish`, {
-          method: "POST",
-        }),
-    ]);
+    try {
+      const result = await tryMany<any>([
+        () => apiRequest<any>(`/api/chapters/${selectedChapterId}/publish`, { method: "POST" }),
+        () => apiRequest<any>(`/api/chapter/${selectedChapterId}/publish`, { method: "POST" }),
+        () => apiRequest<any>(`/api/chapters/${selectedChapterId}/publicar`, { method: "POST" }),
+        () => apiRequest<any>(`/api/chapter/${selectedChapterId}/publicar`, { method: "POST" }),
+        () =>
+          apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}/publish`, {
+            method: "POST",
+          }),
+        () =>
+          apiRequest<any>(`/api/author/${authorId}/chapters/${selectedChapterId}/publish`, {
+            method: "POST",
+          }),
+      ]);
 
-    setSaving(false);
-    setApiInfo("PUBLISH", result.usedPath || "—", result.attempts);
+      setApiInfo("PUBLISH", result.usedPath || "—", result.attempts);
 
-    if (!result.ok) {
-      const hint =
-        result.status === 401
-          ? "401 (token expirado). Faça login novamente."
-          : result.status === 404
-          ? "404 (rota de publish não existe no backend)."
-          : `HTTP ${result.status || "erro"}`;
+      if (!result.ok) {
+        const hint =
+          result.status === 401
+            ? "401 (token expirado). Faça login novamente."
+            : result.status === 404
+            ? "404 (rota de publish não existe no backend)."
+            : `HTTP ${result.status || "erro"}`;
 
-      setToastAuto({ kind: "err", msg: `Falha ao publicar (${hint}).` });
-      return;
+        setToastAuto({ kind: "err", msg: `Falha ao publicar (${hint}).` });
+        return;
+      }
+
+      setToastAuto({ kind: "ok", msg: "Publicado." });
+
+      await loadList();
+      await loadDetail(selectedChapterId);
+    } finally {
+      setSaving(false);
     }
-
-    setToastAuto({ kind: "ok", msg: "Publicado." });
-
-    await loadList();
-    await loadDetail(selectedChapterId);
   }
 
   async function unpublishChapter() {
@@ -699,44 +788,46 @@ export default function ChaptersPage() {
     setSaving(true);
     setToast(null);
 
-    const result = await tryMany<any>([
-      () => apiRequest<any>(`/api/chapters/${selectedChapterId}/unpublish`, { method: "POST" }),
-      () => apiRequest<any>(`/api/chapter/${selectedChapterId}/unpublish`, { method: "POST" }),
-      () => apiRequest<any>(`/api/chapters/${selectedChapterId}/despublicar`, { method: "POST" }),
-      () => apiRequest<any>(`/api/chapter/${selectedChapterId}/despublicar`, { method: "POST" }),
-      () =>
-        apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}/unpublish`, {
-          method: "POST",
-        }),
-      () =>
-        apiRequest<any>(`/api/author/${authorId}/chapters/${selectedChapterId}/unpublish`, {
-          method: "POST",
-        }),
-    ]);
+    try {
+      const result = await tryMany<any>([
+        () => apiRequest<any>(`/api/chapters/${selectedChapterId}/unpublish`, { method: "POST" }),
+        () => apiRequest<any>(`/api/chapter/${selectedChapterId}/unpublish`, { method: "POST" }),
+        () => apiRequest<any>(`/api/chapters/${selectedChapterId}/despublicar`, { method: "POST" }),
+        () => apiRequest<any>(`/api/chapter/${selectedChapterId}/despublicar`, { method: "POST" }),
+        () =>
+          apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}/unpublish`, {
+            method: "POST",
+          }),
+        () =>
+          apiRequest<any>(`/api/author/${authorId}/chapters/${selectedChapterId}/unpublish`, {
+            method: "POST",
+          }),
+      ]);
 
-    setSaving(false);
-    setApiInfo("UNPUBLISH", result.usedPath || "—", result.attempts);
+      setApiInfo("UNPUBLISH", result.usedPath || "—", result.attempts);
 
-    if (!result.ok) {
-      const hint =
-        result.status === 401
-          ? "401 (token expirado). Faça login novamente."
-          : result.status === 404
-          ? "404 (rota de unpublish não existe no backend)."
-          : `HTTP ${result.status || "erro"}`;
+      if (!result.ok) {
+        const hint =
+          result.status === 401
+            ? "401 (token expirado). Faça login novamente."
+            : result.status === 404
+            ? "404 (rota de unpublish não existe no backend)."
+            : `HTTP ${result.status || "erro"}`;
 
-      setToastAuto({ kind: "err", msg: `Falha ao despublicar (${hint}).` });
-      return;
+        setToastAuto({ kind: "err", msg: `Falha ao despublicar (${hint}).` });
+        return;
+      }
+
+      setToastAuto({ kind: "ok", msg: "Despublicado." });
+
+      await loadList();
+      await loadDetail(selectedChapterId);
+    } finally {
+      setSaving(false);
     }
-
-    setToastAuto({ kind: "ok", msg: "Despublicado." });
-
-    await loadList();
-    await loadDetail(selectedChapterId);
   }
 
   const headerCount = items.length;
-  const statusBadgeStyle = status === "PUBLIC" ? styles.badgePublic : styles.badgeDraft;
 
   const filteredItems = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -748,339 +839,353 @@ export default function ChaptersPage() {
     });
   }, [items, q]);
 
+  // ✅ monta uma vez: loadList quando token+authorId estiverem ok
+  const bootedRef = useRef(false);
   useEffect(() => {
+    if (bootedRef.current) return;
+    if (!token || !authorId) return;
+    bootedRef.current = true;
     void loadList();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ✅ se o token/author mudar (ex.: novo login), tenta carregar de novo
-  useEffect(() => {
-    if (token && authorId) {
-      void loadList();
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, authorId]);
 
   const selectedTitlePreview = title?.trim() ? title.trim() : selectedChapterId ? "Capítulo" : "—";
 
+  const badgeToneClass = (s: ChapterStatus) => (s === "PUBLIC" ? "badge-public" : "badge-draft");
+
   return (
-    <div style={styles.page}>
-      <div style={styles.headerCard}>
-        <div style={styles.headerRow}>
-          <div>
-            <div style={styles.h1}>Sua jornada</div>
-            <div style={styles.sub}>
-              Aqui você organiza sua história em <b>capítulos</b> (fases). Entre em um capítulo, escreva, refine e publique quando quiser.
-              <span style={{ opacity: 0.8 }}> Memórias/Timeline continuam no core — fora desta tela.</span>
-            </div>
-          </div>
-
-          <div style={styles.headerActions}>
-            <div style={styles.pill}>jornada • capítulos = fases • escrita com calma</div>
-            <button
-              style={{ ...styles.btn, ...(loading ? styles.btnDisabled : {}) }}
-              onClick={() => {
-                if (!confirmIfDirty("Atualizar lista")) return;
-                void loadList();
-              }}
-              disabled={loading}
-              title="Recarrega lista e, se necessário, seleciona o primeiro"
-            >
-              Atualizar
-            </button>
-            <button
-              style={{ ...styles.btnPrimary, ...(saving ? styles.btnDisabled : {}) }}
-              onClick={createChapter}
-              disabled={saving}
-              title="Cria um capítulo rascunho no banco"
-            >
-              + Novo capítulo
-            </button>
-          </div>
-        </div>
-
-        {/* ✅ meta + diagnóstico colapsável */}
-        <div style={styles.headerMeta}>
-          <div style={styles.metaRow}>
-            <span style={styles.smallMuted}>
-              {authorId ? `author_id: ${authorId}` : "author_id: —"} • {headerCount} capítulo(s)
-              {isDirty ? <span style={styles.dirtyDot} title="Alterações não salvas"> • ● não salvo</span> : null}
-            </span>
-
-            <button
-              type="button"
-              style={styles.diagToggle}
-              onClick={() => setShowDiag((v) => !v)}
-              title="Mostrar/ocultar diagnóstico de rotas (sem tocar API)"
-            >
-              {showDiag ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
-            </button>
-          </div>
-
-          {showDiag && (
-            <div style={styles.diagBox}>
-              <div style={styles.diagLine}>
-                <b>API</b>: {lastApiInfo || "—"}
-              </div>
-              <div style={styles.diagHint}>
-                *diagnóstico local (rota que funcionou + tentativas). Não altera API.*
-              </div>
-            </div>
-          )}
-        </div>
-
-        {toast && (
-          <div
-            style={{
-              ...styles.toast,
-              ...(toast.kind === "ok"
-                ? styles.toastOk
-                : toast.kind === "warn"
-                ? styles.toastWarn
-                : styles.toastErr),
-            }}
-          >
-            {toast.msg}
-          </div>
-        )}
-      </div>
-
-      <div style={styles.grid}>
-        {/* left: list */}
-        <div style={styles.listCard}>
-          <div style={styles.listHeader}>
-            <div>
-              <div style={styles.cardTitle}>Etapas da sua jornada</div>
-              <div style={styles.cardMeta}>Fases/estruturas da sua história</div>
+    <div className="hdud-page">
+      <div className="hdud-container" style={{ margin: "0 auto" }}>
+        {/* Header (padrão HDUD) */}
+        <div className="hdud-card">
+          <div className="hdud-pagehead">
+            <div style={{ minWidth: 0 }}>
+              <h1 className="hdud-pagehead-title">Sua jornada</h1>
+              <p className="hdud-pagehead-subtitle">
+                Aqui você organiza sua história em <b>capítulos</b> (fases). Entre em um capítulo, escreva, refine e publique quando quiser.{" "}
+                <span style={{ opacity: 0.85 }}>Memórias/Timeline continuam no core — fora desta tela.</span>
+              </p>
             </div>
 
-            <div style={styles.cardMetaRight}>
-              <div style={styles.cardMeta}>{items.length} item(ns)</div>
-            </div>
-          </div>
+            <div className="hdud-actions">
+              <div style={styles.pill}>jornada • capítulos = fases • escrita com calma</div>
 
-          <div style={styles.searchRow}>
-            <input
-              style={styles.searchInput}
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Buscar por título ou descrição…"
-              aria-label="Buscar capítulos"
-            />
-            {q.trim() ? (
-              <button style={styles.searchClear} onClick={() => setQ("")} title="Limpar busca">
-                Limpar
-              </button>
-            ) : null}
-          </div>
-
-          {items.length === 0 ? (
-            <div style={styles.emptyBox}>
-              <div style={styles.emptyTitle}>Sua casa ainda está vazia.</div>
-              <div style={styles.emptyText}>
-                Crie seu primeiro <b>capítulo</b> (uma fase da sua vida). Depois, você entra nele e escreve com calma — sem
-                pressa, sem “postar”.
-              </div>
-              <button style={{ ...styles.btnPrimary, marginTop: 10 }} onClick={createChapter} disabled={saving}>
-                + Criar meu primeiro capítulo
-              </button>
-            </div>
-          ) : filteredItems.length === 0 ? (
-            <div style={styles.emptyBox}>
-              Nenhum capítulo encontrado para <b>{q.trim()}</b>.
-            </div>
-          ) : (
-            <div style={styles.listWrap}>
-              {filteredItems.map((c) => {
-                const isSelected = c.chapter_id === selectedChapterId;
-                const badgeStyle = c.status === "PUBLIC" ? styles.badgePublic : styles.badgeDraft;
-
-                return (
-                  <button
-                    key={c.chapter_id}
-                    style={{ ...styles.itemBtn, ...(isSelected ? styles.itemBtnActive : {}) }}
-                    onClick={() => {
-                      if (c.chapter_id !== selectedChapterId) {
-                        if (!confirmIfDirty("Trocar de capítulo")) return;
-                      }
-                      void loadDetail(c.chapter_id);
-                    }}
-                    title="Abrir capítulo"
-                  >
-                    <div style={styles.itemTop}>
-                      <div style={styles.itemTitle}>
-                        <b>{c.title || "Sem título"}</b>
-                        <span style={styles.itemId}>#{c.chapter_id}</span>
-                      </div>
-                      <span style={{ ...styles.badge, ...badgeStyle }}>
-                        {c.status === "PUBLIC" ? "Público" : "Rascunho"}
-                      </span>
-                    </div>
-
-                    <div style={styles.itemDesc}>{c.description || "—"}</div>
-
-                    <div style={styles.itemMeta}>
-                      Atualizado: {formatDateBR(c.updated_at)} • Criado: {formatDateBR(c.created_at)}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* right: editor */}
-        <div style={styles.editorCard}>
-          <div style={styles.editorHeader}>
-            <div>
-              <div style={styles.cardTitle}>Escrevendo</div>
-              <div style={styles.cardMeta}>
-                Criado: {createdAt} • Última atualização: {updatedAt} • Publicado: {publishedAt}
-              </div>
-            </div>
-
-            <div style={styles.editorBadges}>
-              <span style={styles.badgeSoft}>ID {selectedChapterId ?? "—"}</span>
-              <span style={styles.badgeSoft}>{versionLabel}</span>
-              <span style={{ ...styles.badge, ...statusBadgeStyle }}>
-                {status === "PUBLIC" ? "Público" : "Rascunho"}
-              </span>
-            </div>
-
-            <div style={styles.editorActions}>
               <button
-                style={{ ...styles.btn, ...(loading || !selectedChapterId ? styles.btnDisabled : {}) }}
+                className="hdud-btn"
                 onClick={() => {
-                  if (!selectedChapterId) return;
-                  if (!confirmIfDirty("Recarregar capítulo (perde mudanças locais)")) return;
-                  void loadDetail(selectedChapterId);
+                  if (loading || saving) return;
+                  if (!confirmIfDirty("Atualizar lista")) return;
+                  void loadList();
                 }}
-                disabled={loading || !selectedChapterId}
+                disabled={loading || saving}
+                title="Recarrega lista e, se necessário, seleciona o primeiro"
               >
-                Recarregar
+                Atualizar
               </button>
 
               <button
-                style={{ ...styles.btnPrimary, ...(saving || !selectedChapterId ? styles.btnDisabled : {}) }}
-                onClick={saveChapter}
-                disabled={saving || !selectedChapterId}
+                className="hdud-btn hdud-btn-primary"
+                onClick={createChapter}
+                disabled={saving}
+                title="Cria um capítulo rascunho no banco"
               >
-                Salvar
+                + Novo capítulo
               </button>
-
-              {status === "PUBLIC" ? (
-                <button
-                  style={{ ...styles.btn, ...(saving || !selectedChapterId ? styles.btnDisabled : {}) }}
-                  onClick={unpublishChapter}
-                  disabled={saving || !selectedChapterId}
-                >
-                  Despublicar
-                </button>
-              ) : (
-                <button
-                  style={{ ...styles.btn, ...(saving || !selectedChapterId ? styles.btnDisabled : {}) }}
-                  onClick={publishChapter}
-                  disabled={saving || !selectedChapterId}
-                >
-                  Publicar
-                </button>
-              )}
             </div>
           </div>
 
-          {!selectedChapterId ? (
-            <div style={styles.rightEmpty}>
-              <div style={styles.rightEmptyTitle}>Escolha uma etapa</div>
-              <div style={styles.rightEmptyText}>
-                À esquerda, selecione um capítulo (uma fase). Aqui você escreve e refina o texto do capítulo, sem pressão.
-              </div>
+          {/* Meta + diagnóstico */}
+          <div style={styles.headerMeta}>
+            <div style={styles.metaRow}>
+              <span style={styles.smallMuted}>
+                {authorId ? `author_id: ${authorId}` : "author_id: —"} • {headerCount} capítulo(s)
+                {isDirty ? (
+                  <span style={styles.dirtyDot} title="Alterações não salvas">
+                    {" "}
+                    • ● não salvo
+                  </span>
+                ) : null}
+              </span>
+
+              <button
+                type="button"
+                className="hdud-btn"
+                style={styles.diagBtn}
+                onClick={() => setShowDiag((v) => !v)}
+                title="Mostrar/ocultar diagnóstico de rotas (sem tocar API)"
+              >
+                {showDiag ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
+              </button>
             </div>
-          ) : (
-            <div style={styles.form}>
-              <label style={styles.label}>
-                <span style={styles.labelTop}>Título (livre)</span>
-                <input
-                  style={styles.input}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  onFocus={() => {
-                    if (!didFocusTitle.current) {
-                      didFocusTitle.current = true;
-                      if (selectedChapterId && title === DEFAULT_NEW_TITLE) setTitle("");
-                    }
-                  }}
-                  placeholder="Ex.: Minha chegada ao mundo"
-                />
-                <span style={styles.counter}>{title.trim().length}/200</span>
-              </label>
 
-              <label style={styles.label}>
-                <span style={styles.labelTop}>Descrição (uma frase)</span>
-                <input
-                  style={styles.input}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  onFocus={() => {
-                    if (!didFocusDesc.current) {
-                      didFocusDesc.current = true;
-                      if (selectedChapterId && description === DEFAULT_NEW_DESCRIPTION) setDescription("");
-                    }
-                  }}
-                  placeholder={DEFAULT_NEW_DESCRIPTION}
-                />
-                <span style={styles.counter}>{description.trim().length}/400</span>
-              </label>
-
-              <label style={styles.label}>
-                <span style={styles.labelTop}>Texto do capítulo</span>
-                <textarea
-                  style={styles.textarea}
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  placeholder="Escreva aqui…"
-                />
-                <span style={styles.counter}>{(body || "").length} caracteres</span>
-              </label>
-
-              <div style={styles.noteMuted}>
-                Nota: esta tela é “camada narrativa” determinística. Integração com IA/geração entra depois, sem mexer no core.
+            {showDiag && (
+              <div style={styles.diagBox}>
+                <div style={styles.diagLine}>
+                  <b>API</b>: {lastApiInfo || "—"}
+                </div>
+                <div style={styles.diagLine}>
+                  <b>DIRTY</b>: {dirtyInfo}
+                </div>
+                <div style={styles.diagHint}>*diagnóstico local (rota que funcionou + tentativas). Não altera API.*</div>
               </div>
+            )}
+          </div>
+
+          {/* Toast padronizado */}
+          {toast && (
+            <div
+              className={[
+                "hdud-alert",
+                toast.kind === "ok"
+                  ? "hdud-alert-success"
+                  : toast.kind === "warn"
+                  ? "hdud-alert-warn"
+                  : "hdud-alert-danger",
+              ].join(" ")}
+              style={{ marginTop: 10 }}
+            >
+              {toast.msg}
             </div>
           )}
-        </div>
-      </div>
 
-      <div style={styles.suggestCard}>
-        <div style={styles.suggestTitle}>
-          Guia de escrita (opcional) — <b>{selectedTitlePreview}</b>
+          {!canUseApi ? (
+            <div className="hdud-alert hdud-alert-warn" style={{ marginTop: 12 }}>
+              Token ausente. Faça login para ver/editar capítulos.
+            </div>
+          ) : null}
         </div>
-        <ul style={styles.suggestList}>
-          <li>Qual cenário define essa fase (casa, cidade, rotina, clima, época)?</li>
-          <li>Quem são as pessoas centrais aqui? O que elas significam para você?</li>
-          <li>Qual foi a virada (o antes e o depois)?</li>
-          <li>Gancho do seu texto: {body ? `${compactText(body, 48)}` : "(ainda vazio)"}</li>
-        </ul>
-        <div style={styles.suggestHint}>*isso é só guia premium de escrita (determinístico)*</div>
+
+        {/* Grid principal */}
+        <div style={styles.grid}>
+          {/* left: list */}
+          <div className="hdud-card">
+            <div style={styles.listHeader}>
+              <div>
+                <div style={styles.cardTitle}>Etapas da sua jornada</div>
+                <div style={styles.cardMeta}>Fases/estruturas da sua história</div>
+              </div>
+              <div style={styles.cardMetaRight}>
+                <div style={styles.cardMeta}>{items.length} item(ns)</div>
+              </div>
+            </div>
+
+            <div style={styles.searchRow}>
+              <input
+                className="hdud-input"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Buscar por título ou descrição…"
+                aria-label="Buscar capítulos"
+              />
+              {q.trim() ? (
+                <button className="hdud-btn" onClick={() => setQ("")} title="Limpar busca">
+                  Limpar
+                </button>
+              ) : null}
+            </div>
+
+            {items.length === 0 ? (
+              <div style={styles.emptyBox}>
+                <div style={styles.emptyTitle}>Sua casa ainda está vazia.</div>
+                <div style={styles.emptyText}>
+                  Crie seu primeiro <b>capítulo</b> (uma fase da sua vida). Depois, você entra nele e escreve com calma — sem pressa.
+                </div>
+                <button className="hdud-btn hdud-btn-primary" style={{ marginTop: 10 }} onClick={createChapter} disabled={saving}>
+                  + Criar meu primeiro capítulo
+                </button>
+              </div>
+            ) : filteredItems.length === 0 ? (
+              <div style={styles.emptyBox}>
+                Nenhum capítulo encontrado para <b>{q.trim()}</b>.
+              </div>
+            ) : (
+              <div style={styles.listWrap}>
+                {filteredItems.map((c) => {
+                  const isSelected = c.chapter_id === selectedChapterId;
+                  const badgeClass = badgeToneClass(c.status);
+
+                  return (
+                    <button
+                      key={c.chapter_id}
+                      style={{ ...styles.itemBtn, ...(isSelected ? styles.itemBtnActive : {}) }}
+                      onClick={() => {
+                        if (loading || saving) return;
+                        if (c.chapter_id !== selectedChapterId) {
+                          if (!confirmIfDirty("Trocar de capítulo")) return;
+                        }
+                        void loadDetail(c.chapter_id);
+                      }}
+                      title="Abrir capítulo"
+                    >
+                      <div style={styles.itemTop}>
+                        <div style={styles.itemTitle}>
+                          <b>{c.title || "Sem título"}</b>
+                          <span style={styles.itemId}>#{c.chapter_id}</span>
+                        </div>
+
+                        <span
+                          style={{
+                            ...styles.badge,
+                            ...(c.status === "PUBLIC" ? styles.badgePublic : styles.badgeDraft),
+                          }}
+                          className={badgeClass}
+                        >
+                          {c.status === "PUBLIC" ? "Público" : "Rascunho"}
+                        </span>
+                      </div>
+
+                      <div style={styles.itemDesc}>{c.description || "—"}</div>
+
+                      <div style={styles.itemMeta}>
+                        Atualizado: {formatDateBR(c.updated_at)} • Criado: {formatDateBR(c.created_at)}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* right: editor */}
+          <div className="hdud-card" style={{ minHeight: 420 }}>
+            <div style={styles.editorHeader}>
+              <div>
+                <div style={styles.cardTitle}>Escrevendo</div>
+                <div style={styles.cardMeta}>
+                  Criado: {createdAt} • Última atualização: {updatedAt} • Publicado: {publishedAt}
+                </div>
+              </div>
+
+              <div style={styles.editorBadges}>
+                <span style={styles.badgeSoft}>ID {selectedChapterId ?? "—"}</span>
+                <span style={styles.badgeSoft}>{versionLabel}</span>
+                <span
+                  style={{
+                    ...styles.badge,
+                    ...(status === "PUBLIC" ? styles.badgePublic : styles.badgeDraft),
+                  }}
+                >
+                  {status === "PUBLIC" ? "Público" : "Rascunho"}
+                </span>
+              </div>
+
+              <div style={styles.editorActions}>
+                <button
+                  className="hdud-btn"
+                  onClick={() => {
+                    if (!selectedChapterId) return;
+                    if (!confirmIfDirty("Recarregar capítulo (perde mudanças locais)")) return;
+                    void loadDetail(selectedChapterId);
+                  }}
+                  disabled={loading || saving || !selectedChapterId}
+                >
+                  Recarregar
+                </button>
+
+                <button
+                  className="hdud-btn hdud-btn-primary"
+                  onClick={saveChapter}
+                  disabled={saving || loading || !selectedChapterId}
+                >
+                  Salvar
+                </button>
+
+                {status === "PUBLIC" ? (
+                  <button className="hdud-btn" onClick={unpublishChapter} disabled={saving || loading || !selectedChapterId}>
+                    Despublicar
+                  </button>
+                ) : (
+                  <button className="hdud-btn" onClick={publishChapter} disabled={saving || loading || !selectedChapterId}>
+                    Publicar
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {!selectedChapterId ? (
+              <div style={styles.rightEmpty}>
+                <div style={styles.rightEmptyTitle}>Escolha uma etapa</div>
+                <div style={styles.rightEmptyText}>
+                  À esquerda, selecione um capítulo (uma fase). Aqui você escreve e refina o texto do capítulo, sem pressão.
+                </div>
+              </div>
+            ) : (
+              <div style={styles.form}>
+                <label style={styles.label}>
+                  <span style={styles.labelTop}>Título (livre)</span>
+                  <input
+                    className="hdud-input"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    onFocus={() => {
+                      if (!didFocusTitle.current) {
+                        didFocusTitle.current = true;
+                        if (selectedChapterId && title === DEFAULT_NEW_TITLE) setTitle("");
+                      }
+                    }}
+                    placeholder="Ex.: Minha chegada ao mundo"
+                  />
+                  <span style={styles.counter}>{title.trim().length}/200</span>
+                </label>
+
+                <label style={styles.label}>
+                  <span style={styles.labelTop}>Descrição (uma frase)</span>
+                  <input
+                    className="hdud-input"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    onFocus={() => {
+                      if (!didFocusDesc.current) {
+                        didFocusDesc.current = true;
+                        if (selectedChapterId && description === DEFAULT_NEW_DESCRIPTION) setDescription("");
+                      }
+                    }}
+                    placeholder={DEFAULT_NEW_DESCRIPTION}
+                  />
+                  <span style={styles.counter}>{description.trim().length}/400</span>
+                </label>
+
+                <label style={styles.label}>
+                  <span style={styles.labelTop}>Texto do capítulo</span>
+                  <textarea
+                    className="hdud-textarea"
+                    value={body}
+                    onChange={(e) => setBody(e.target.value)}
+                    placeholder="Escreva aqui…"
+                    style={{ minHeight: 220 }}
+                  />
+                  <span style={styles.counter}>{(body || "").length} caracteres</span>
+                </label>
+
+                <div style={styles.noteMuted}>
+                  Nota: esta tela é “camada narrativa” determinística. Integração com IA/geração entra depois, sem mexer no core.
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Guia (mantém premium) */}
+        <div className="hdud-card" style={{ marginTop: 18 }}>
+          <div style={styles.suggestTitle}>
+            Guia de escrita (opcional) — <b>{selectedTitlePreview}</b>
+          </div>
+          <ul style={styles.suggestList}>
+            <li>Qual cenário define essa fase (casa, cidade, rotina, clima, época)?</li>
+            <li>Quem são as pessoas centrais aqui? O que elas significam para você?</li>
+            <li>Qual foi a virada (o antes e o depois)?</li>
+            <li>Gancho do seu texto: {body ? `${compactText(body, 48)}` : "(ainda vazio)"}</li>
+          </ul>
+          <div style={styles.suggestHint}>*isso é só guia premium de escrita (determinístico)*</div>
+        </div>
       </div>
     </div>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  page: { padding: 18, color: "var(--hdud-text)" },
+  grid: { display: "grid", gridTemplateColumns: "360px 1fr", gap: 18, alignItems: "start", marginTop: 18 },
 
-  headerCard: {
-    background: "var(--hdud-card)",
-    borderRadius: 14,
-    padding: 18,
-    boxShadow: "var(--hdud-shadow)",
-    marginBottom: 18,
-    border: "1px solid var(--hdud-border)",
-  },
-  headerRow: { display: "flex", gap: 12, alignItems: "flex-start", justifyContent: "space-between" },
-  h1: { fontSize: 34, fontWeight: 800, letterSpacing: -0.5, marginBottom: 4 },
-  sub: { opacity: 0.78, fontSize: 13, lineHeight: 1.35 },
-  headerActions: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
   pill: {
     background: "var(--hdud-surface-2)",
     border: "1px solid var(--hdud-border)",
@@ -1088,44 +1193,15 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 999,
     fontSize: 12,
     opacity: 0.9,
-    fontWeight: 800,
+    fontWeight: 900,
   },
-  btn: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    color: "var(--hdud-text)",
-    padding: "8px 12px",
-    borderRadius: 10,
-    cursor: "pointer",
-    fontWeight: 700,
-  },
-  btnPrimary: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-primary-bg)",
-    color: "var(--hdud-primary-text)",
-    padding: "8px 12px",
-    borderRadius: 10,
-    cursor: "pointer",
-    fontWeight: 800,
-  },
-  btnDisabled: { opacity: 0.55, cursor: "not-allowed" },
 
   headerMeta: { marginTop: 10 },
   metaRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" },
   smallMuted: { fontSize: 12, opacity: 0.7 },
   dirtyDot: { fontSize: 12, fontWeight: 900, opacity: 0.85 },
 
-  diagToggle: {
-    border: "1px solid var(--hdud-border)",
-    background: "transparent",
-    color: "var(--hdud-text)",
-    padding: "6px 10px",
-    borderRadius: 999,
-    cursor: "pointer",
-    fontWeight: 800,
-    fontSize: 12,
-    opacity: 0.75,
-  },
+  diagBtn: { borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 900, opacity: 0.8 },
   diagBox: {
     marginTop: 10,
     border: "1px dashed var(--hdud-border)",
@@ -1136,20 +1212,6 @@ const styles: Record<string, React.CSSProperties> = {
   diagLine: { fontSize: 12, opacity: 0.85 },
   diagHint: { marginTop: 6, fontSize: 11, opacity: 0.6 },
 
-  toast: { marginTop: 10, padding: 10, borderRadius: 10, fontWeight: 700, fontSize: 13 },
-  toastOk: { background: "rgba(0,200,120,0.15)", border: "1px solid rgba(0,200,120,0.25)" },
-  toastWarn: { background: "rgba(255,180,0,0.15)", border: "1px solid rgba(255,180,0,0.25)" },
-  toastErr: { background: "rgba(255,0,80,0.12)", border: "1px solid rgba(255,0,80,0.22)" },
-
-  grid: { display: "grid", gridTemplateColumns: "360px 1fr", gap: 18, alignItems: "start" },
-
-  listCard: {
-    background: "var(--hdud-card)",
-    borderRadius: 14,
-    padding: 14,
-    boxShadow: "var(--hdud-shadow)",
-    border: "1px solid var(--hdud-border)",
-  },
   listHeader: {
     display: "flex",
     alignItems: "flex-start",
@@ -1157,32 +1219,11 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 10,
     marginBottom: 10,
   },
-  cardTitle: { fontWeight: 900, fontSize: 14 },
-  cardMeta: { fontSize: 12, opacity: 0.7 },
+  cardTitle: { fontWeight: 950, fontSize: 14 },
+  cardMeta: { fontSize: 12, opacity: 0.7, marginTop: 3 },
   cardMetaRight: { display: "flex", alignItems: "center", gap: 10 },
 
-  searchRow: { display: "flex", gap: 8, marginBottom: 10 },
-  searchInput: {
-    flex: 1,
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    color: "var(--hdud-text)",
-    borderRadius: 10,
-    padding: "9px 10px",
-    fontSize: 13,
-    outline: "none",
-  },
-  searchClear: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    color: "var(--hdud-text)",
-    borderRadius: 10,
-    padding: "9px 10px",
-    fontSize: 13,
-    cursor: "pointer",
-    fontWeight: 800,
-    opacity: 0.9,
-  },
+  searchRow: { display: "flex", gap: 8, marginBottom: 10, alignItems: "center" },
 
   emptyBox: {
     border: "1px dashed var(--hdud-border)",
@@ -1191,8 +1232,9 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.95,
     fontSize: 13,
     lineHeight: 1.35,
+    background: "rgba(255,255,255,0.02)",
   },
-  emptyTitle: { fontWeight: 900, marginBottom: 6, fontSize: 13 },
+  emptyTitle: { fontWeight: 950, marginBottom: 6, fontSize: 13 },
   emptyText: { opacity: 0.85 },
 
   listWrap: { display: "flex", flexDirection: "column", gap: 10 },
@@ -1205,17 +1247,19 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 12,
     cursor: "pointer",
     textAlign: "left",
+    transition: "transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease",
   },
   itemBtnActive: { outline: "2px solid var(--hdud-accent-border)" },
+
   itemTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  itemTitle: { fontSize: 13, fontWeight: 900, display: "flex", alignItems: "center", gap: 8 },
+  itemTitle: { fontSize: 13, fontWeight: 950, display: "flex", alignItems: "center", gap: 8 },
   itemId: { fontSize: 11, opacity: 0.65, fontWeight: 900 },
   itemDesc: { marginTop: 6, fontSize: 12, opacity: 0.78, lineHeight: 1.3 },
   itemMeta: { marginTop: 8, fontSize: 11, opacity: 0.65 },
 
   badge: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 950,
     padding: "4px 8px",
     borderRadius: 999,
     border: "1px solid var(--hdud-border)",
@@ -1224,9 +1268,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   badgeDraft: { background: "rgba(255,180,0,0.15)" },
   badgePublic: { background: "rgba(0,200,120,0.15)" },
+
   badgeSoft: {
     fontSize: 11,
-    fontWeight: 900,
+    fontWeight: 950,
     padding: "4px 8px",
     borderRadius: 999,
     background: "var(--hdud-surface-2)",
@@ -1234,14 +1279,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--hdud-text)",
   },
 
-  editorCard: {
-    background: "var(--hdud-card)",
-    borderRadius: 14,
-    padding: 14,
-    boxShadow: "var(--hdud-shadow)",
-    border: "1px solid var(--hdud-border)",
-    minHeight: 420,
-  },
   editorHeader: {
     display: "grid",
     gridTemplateColumns: "1fr auto",
@@ -1257,47 +1294,19 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 12,
     padding: 18,
     opacity: 0.95,
+    background: "rgba(255,255,255,0.02)",
   },
-  rightEmptyTitle: { fontWeight: 900, marginBottom: 6, fontSize: 13 },
+  rightEmptyTitle: { fontWeight: 950, marginBottom: 6, fontSize: 13 },
   rightEmptyText: { fontSize: 12, opacity: 0.78, lineHeight: 1.35 },
 
   form: { marginTop: 10, display: "flex", flexDirection: "column", gap: 12 },
   label: { display: "flex", flexDirection: "column", gap: 6 },
-  labelTop: { fontSize: 12, fontWeight: 900, opacity: 0.85 },
-
-  input: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    color: "var(--hdud-text)",
-    borderRadius: 10,
-    padding: "10px 12px",
-    fontSize: 13,
-    outline: "none",
-  },
-  textarea: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    color: "var(--hdud-text)",
-    borderRadius: 10,
-    padding: "10px 12px",
-    fontSize: 13,
-    outline: "none",
-    minHeight: 200,
-    resize: "vertical",
-  },
+  labelTop: { fontSize: 12, fontWeight: 950, opacity: 0.85 },
   counter: { fontSize: 11, opacity: 0.65 },
 
   noteMuted: { fontSize: 11, opacity: 0.62, marginTop: 2 },
 
-  suggestCard: {
-    marginTop: 18,
-    background: "var(--hdud-card)",
-    borderRadius: 14,
-    padding: 14,
-    boxShadow: "var(--hdud-shadow)",
-    border: "1px solid var(--hdud-border)",
-  },
-  suggestTitle: { fontSize: 13, fontWeight: 900, marginBottom: 8 },
+  suggestTitle: { fontSize: 13, fontWeight: 950, marginBottom: 8 },
   suggestList: { margin: 0, paddingLeft: 18, fontSize: 12, opacity: 0.85, lineHeight: 1.35 },
   suggestHint: { marginTop: 8, fontSize: 11, opacity: 0.62 },
 };

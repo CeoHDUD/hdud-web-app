@@ -108,7 +108,13 @@ type ApiRequestOptions = {
   skipAuthRetry?: boolean;
 };
 
-let refreshInFlight: Promise<{ access_token: string; refresh_token?: string } | null> | null = null;
+let refreshInFlight:
+  | Promise<{ access_token: string; refresh_token?: string } | null>
+  | null = null;
+
+// ✅ Guard anti-loop: evita disparar o handler múltiplas vezes em cascata
+let unauthorizedFiredAtMs = 0;
+const UNAUTHORIZED_DEBOUNCE_MS = 1500;
 
 function extractAccessTokenFromPayload(payload: any): string | null {
   if (!payload) return null;
@@ -140,7 +146,9 @@ function extractRefreshTokenFromPayload(payload: any): string | null {
   return typeof rt === "string" && rt.trim() ? rt.trim() : null;
 }
 
-async function refreshTokenOnce(baseUrl: string): Promise<{ access_token: string; refresh_token?: string } | null> {
+async function refreshTokenOnce(
+  baseUrl: string
+): Promise<{ access_token: string; refresh_token?: string } | null> {
   // Single-flight: múltiplas requests 401 aguardam a mesma promise.
   if (refreshInFlight) return refreshInFlight;
 
@@ -158,8 +166,8 @@ async function refreshTokenOnce(baseUrl: string): Promise<{ access_token: string
       body: JSON.stringify({ refresh_token }),
     });
 
-    const contentType = res.headers.get("content-type") || "";
-    const isJson = contentType.includes("application/json");
+    const ct = res.headers.get("content-type") || "";
+    const isJson = ct.includes("application/json");
 
     let payload: any = undefined;
     try {
@@ -194,11 +202,33 @@ function isRefreshEndpoint(path: string) {
 }
 
 async function callUnauthorizedHandlerSafe() {
+  const now = Date.now();
+  if (now - unauthorizedFiredAtMs < UNAUTHORIZED_DEBOUNCE_MS) return;
+  unauthorizedFiredAtMs = now;
+
   try {
     unauthorizedHandler?.();
   } catch {
     // ignore
   }
+}
+
+/**
+ * ✅ MVP: se chamarem /auth/refresh sem body (como no App.tsx),
+ * auto-injeta { refresh_token } a partir do storage.
+ */
+function normalizeOptionsForRefresh(path: string, options: ApiRequestOptions): ApiRequestOptions {
+  if (!isRefreshEndpoint(path)) return options;
+
+  const method = options.method || "GET";
+  if (method !== "POST") return options;
+
+  if (options.body !== undefined) return options;
+
+  const rt = getRefreshToken();
+  if (!rt) return options;
+
+  return { ...options, body: { refresh_token: rt } };
 }
 
 async function apiRequestInternal<T = any>(
@@ -209,35 +239,38 @@ async function apiRequestInternal<T = any>(
   const baseUrl = getBaseUrl();
   const url = `${baseUrl}${path}`;
 
+  // ✅ garante refresh body quando vier vazio
+  const normalizedOptions = normalizeOptionsForRefresh(path, options);
+
   const token = getAccessToken();
 
   const headers: Record<string, string> = {
-    ...(options.headers || {}),
+    ...(normalizedOptions.headers || {}),
   };
 
   // Autoriza sempre que houver token
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const isFormData =
-    typeof FormData !== "undefined" && options.body instanceof FormData;
+    typeof FormData !== "undefined" && normalizedOptions.body instanceof FormData;
 
-  if (options.body !== undefined && !isFormData) {
+  if (normalizedOptions.body !== undefined && !isFormData) {
     headers["Content-Type"] = "application/json";
   }
 
   const res = await fetch(url, {
-    method: options.method || "GET",
+    method: normalizedOptions.method || "GET",
     headers,
     body:
-      options.body === undefined
+      normalizedOptions.body === undefined
         ? undefined
         : isFormData
-        ? options.body
-        : JSON.stringify(options.body),
+        ? normalizedOptions.body
+        : JSON.stringify(normalizedOptions.body),
   });
 
-  const contentType = res.headers.get("content-type") || "";
-  const isJson = contentType.includes("application/json");
+  const ct = res.headers.get("content-type") || "";
+  const isJson = ct.includes("application/json");
 
   let payload: any = undefined;
   try {
@@ -249,7 +282,7 @@ async function apiRequestInternal<T = any>(
   // ✅ 401: tenta refresh + retry automático (1 vez)
   if (res.status === 401) {
     const skip =
-      options.skipAuthRetry === true || isRefreshEndpoint(path) === true;
+      normalizedOptions.skipAuthRetry === true || isRefreshEndpoint(path) === true;
 
     if (!skip && attempt === 0) {
       const refreshed = await refreshTokenOnce(baseUrl);
@@ -266,6 +299,15 @@ async function apiRequestInternal<T = any>(
     const msg =
       (payload && (payload.detail || payload.error)) || `HTTP 401 Unauthorized`;
     throw new ApiError(msg, 401, payload);
+  }
+
+  // ✅ 403 (ex.: role/claims inválidos) — em demo, tratamos como “sessão inválida”
+  if (res.status === 403) {
+    await callUnauthorizedHandlerSafe();
+
+    const msg =
+      (payload && (payload.detail || payload.error)) || `HTTP 403 Forbidden`;
+    throw new ApiError(msg, 403, payload);
   }
 
   if (!res.ok) {
@@ -308,4 +350,28 @@ export const apiFetch = apiRequest;
 export function setAuthTokens(access_token: string, refresh_token?: string) {
   if (access_token) setAccessToken(access_token);
   if (refresh_token) setRefreshToken(refresh_token);
+}
+
+/**
+ * Helper (App.tsx) — para refresh explícito.
+ * - Retorna true se renovou, false se não tinha refresh ou falhou.
+ */
+export async function tryRefreshNow(): Promise<boolean> {
+  const baseUrl = getBaseUrl();
+  const refreshed = await refreshTokenOnce(baseUrl);
+  return !!refreshed?.access_token;
+}
+
+/**
+ * Helper — App/Login podem ler isso para microcopy.
+ */
+export const HDUD_AUTH_NOTICE_KEY = "hdud_auth_notice";
+export const HDUD_AUTH_NOTICE_EXPIRED = "expired";
+
+export function setSessionExpiredNotice() {
+  try {
+    sessionStorage.setItem(HDUD_AUTH_NOTICE_KEY, HDUD_AUTH_NOTICE_EXPIRED);
+  } catch {
+    // ignore
+  }
 }

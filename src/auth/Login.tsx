@@ -1,7 +1,12 @@
 ﻿// C:\HDUD_DATA\hdud-web-app\src\auth\Login.tsx
-﻿// C:\HDUD_DATA\hdud-web-app\src\auth\Login.tsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  HDUD_AUTH_NOTICE_KEY,
+  HDUD_AUTH_NOTICE_EXPIRED,
+  parseJsonSafe,
+  setAuthTokens,
+} from "../lib/api";
 
 type LoginResponse = {
   access_token?: string;
@@ -27,6 +32,22 @@ export default function Login({ onLoggedIn }: Props) {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // ✅ Banner de sessão expirada (demo-grade)
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const v = sessionStorage.getItem(HDUD_AUTH_NOTICE_KEY);
+      if (v === HDUD_AUTH_NOTICE_EXPIRED) {
+        setNotice("Sua sessão expirou. Entre novamente.");
+      }
+      // limpa sempre (pra não ficar “colado”)
+      sessionStorage.removeItem(HDUD_AUTH_NOTICE_KEY);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const ui = {
     bg: "#FBF5E9",
     card: "#FFFDF8",
@@ -39,6 +60,11 @@ export default function Login({ onLoggedIn }: Props) {
     inputBg: "rgba(255, 255, 255, 0.9)",
     errorBg: "#FFF4F4",
     errorBorder: "rgba(220, 38, 38, 0.35)",
+
+    // ✅ Notice (sessão expirada)
+    noticeBg: "rgba(11, 79, 138, 0.08)",
+    noticeBorder: "rgba(11, 79, 138, 0.25)",
+    noticeInk: "rgba(11, 79, 138, 0.95)",
   };
 
   const fieldStyle = {
@@ -73,8 +99,14 @@ export default function Login({ onLoggedIn }: Props) {
       });
 
       if (!res.ok) {
+        // ✅ tenta extrair mensagem “bonita” (json) antes de cair no text()
         const t = await res.text().catch(() => "");
-        throw new Error(t || `Falha no login (HTTP ${res.status}).`);
+        const maybeJson = parseJsonSafe(t);
+        const msg =
+          (maybeJson && (maybeJson.detail || maybeJson.error)) ||
+          t ||
+          `Falha no login (HTTP ${res.status}).`;
+        throw new Error(String(msg));
       }
 
       const data = (await res.json()) as LoginResponse;
@@ -82,18 +114,21 @@ export default function Login({ onLoggedIn }: Props) {
       const accessToken = data.access_token ?? data.accessToken ?? "";
       const refreshToken = data.refresh_token ?? data.refreshToken ?? "";
       const user = data.user ?? {};
-      const authorId = user.authorId ?? user.author_id ?? "";
+      const authorId = user.authorId ?? user.author_id ?? null;
 
       if (!accessToken) throw new Error("Login retornou sem access token.");
 
-      // ✅ Compat: cobre todas as chaves que já apareceram no projeto
-      localStorage.setItem("hdud_access_token", String(accessToken));
-      localStorage.setItem("access_token", String(accessToken));
-      localStorage.setItem("token", String(accessToken));
-      localStorage.setItem("refresh_token", String(refreshToken));
-      localStorage.setItem("author_id", String(authorId ?? ""));
-      localStorage.setItem("HDUD_TOKEN", String(accessToken));
-      localStorage.setItem("HDUD_AUTHOR_ID", String(authorId ?? ""));
+      // ✅ Centraliza persistência de tokens (evita drift com o tempo)
+      setAuthTokens(String(accessToken), refreshToken ? String(refreshToken) : undefined);
+
+      // ✅ author_id só se existir (evita salvar "null"/"undefined")
+      if (authorId !== null && authorId !== undefined && String(authorId).trim()) {
+        localStorage.setItem("author_id", String(authorId));
+        localStorage.setItem("HDUD_AUTHOR_ID", String(authorId));
+      } else {
+        localStorage.removeItem("author_id");
+        localStorage.removeItem("HDUD_AUTHOR_ID");
+      }
 
       // ✅ CRÍTICO: destrava o App (state) sem depender só de navigate()
       onLoggedIn(String(accessToken));
@@ -126,7 +161,7 @@ export default function Login({ onLoggedIn }: Props) {
           border: `1px solid ${ui.border}`,
           borderRadius: 18,
           boxShadow: ui.shadow,
-          padding: 32, // ✅ padding uniforme (corrige percepção direita/esquerda)
+          padding: 32, // ✅ padding uniforme
           boxSizing: "border-box",
         }}
       >
@@ -177,6 +212,25 @@ export default function Login({ onLoggedIn }: Props) {
           </p>
         </div>
 
+        {/* ✅ Notice (sessão expirada) */}
+        {notice ? (
+          <div
+            style={{
+              background: ui.noticeBg,
+              border: `1px solid ${ui.noticeBorder}`,
+              color: ui.noticeInk,
+              borderRadius: 12,
+              padding: "10px 12px",
+              marginBottom: 14,
+              fontSize: 13,
+              lineHeight: 1.35,
+            }}
+          >
+            {notice}
+          </div>
+        ) : null}
+
+        {/* Error */}
         {errorMsg ? (
           <div
             style={{
@@ -248,18 +302,6 @@ export default function Login({ onLoggedIn }: Props) {
           >
             {loading ? "Entrando..." : "Entrar"}
           </button>
-
-          <p
-            style={{
-              margin: "14px 0 0",
-              fontSize: 12,
-              color: ui.muted,
-              textAlign: "center",
-              lineHeight: 1.35,
-            }}
-          >
-            Dica: se o token expirar, o HDUD vai fazer logout automático e pedir login de novo.
-          </p>
         </form>
       </div>
     </div>
