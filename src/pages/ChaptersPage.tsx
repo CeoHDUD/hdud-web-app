@@ -1,22 +1,25 @@
 // C:\HDUD_DATA\hdud-web-app\src\pages\ChaptersPage.tsx
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import ChaptersListPage from "./ChaptersListPage";
+
+/**
+ * ChaptersPage (compat)
+ * - Mantido para não quebrar imports legados.
+ * - Fluxo dedicado real está em:
+ *   /chapters        -> ChaptersListPage
+ *   /chapters/:id    -> ChapterEditorPage
+ */
+
 
 /**
  * ChaptersPage (MVP) — API REAL (sem tocar em Memórias/Core)
  * - Persistência: HDUD-API-Node (banco) -> identity_chapter + identity_chapter_versions
  * - Lista à esquerda + editor à direita
- * - Ações: salvar / publicar / despublicar / recarregar
- *
- * ✅ Ajuste (Home mental = Capítulos):
- * - Home mental: Capítulos são o “mapa” (fases/estrutura). Ação principal: entrar/editar um capítulo.
- * - Memórias/Core NÃO entram aqui (somente camada narrativa do capítulo).
- * - UI mais “lugar / livro”, menos “dashboard”.
+ * - Ações: salvar / publicar / recarregar
  *
  * ✅ Deep-link da Timeline:
  * - Se existir sessionStorage.hdud_open_chapter_id, abre automaticamente esse capítulo ao entrar.
- *
- * ✅ FIX importante:
- * - Não “congelar” token/author_id no mount. Se o token for renovado/trocado, a tela precisa acompanhar.
  *
  * ✅ FECHAMENTO “chave de ouro”:
  * (1) Dirty Guard: evita perder texto em demo (prompt ao trocar de capítulo / sair / recarregar).
@@ -28,9 +31,15 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  *
  * ✅ FIX (dirty fantasma por normalização):
  * - Normaliza CRLF/LF + trailing spaces + newline final antes de comparar snapshot.
+ *
+ * ✅ UI vNext:
+ * - Header/Topbar no estilo “Memórias”: título + CTA + busca + filtros + ordenação + ações.
+ * - Card “Histórico” com lista e painel.
  */
 
 type ChapterStatus = "DRAFT" | "PUBLIC";
+type StatusFilter = "ALL" | "DRAFT" | "PUBLIC";
+type SortKey = "RECENT" | "OLD";
 
 type ApiChapterListItem = {
   chapter_id: number;
@@ -135,10 +144,7 @@ function parseJwtPayload(token: string): any | null {
 
 function redirectToLogin(reason?: string) {
   try {
-    sessionStorage.setItem(
-      "hdud_after_login_path",
-      window.location.pathname + window.location.search + window.location.hash
-    );
+    sessionStorage.setItem("hdud_after_login_path", window.location.pathname + window.location.search + window.location.hash);
     if (reason) sessionStorage.setItem("hdud_login_reason", reason);
   } catch {}
   try {
@@ -185,7 +191,6 @@ type TryResult<T> = {
   attempts: Array<{ path: string; status: number; ok: boolean }>;
 };
 
-// tenta várias rotas (compat/proxy). primeira que der ok vira a escolhida.
 async function tryMany<T>(
   calls: Array<() => Promise<{ ok: boolean; status: number; data: T | null; usedPath: string }>>
 ): Promise<TryResult<T>> {
@@ -302,6 +307,8 @@ export default function ChaptersPage() {
 
   const [items, setItems] = useState<ApiChapterListItem[]>([]);
   const [selectedChapterId, setSelectedChapterId] = useState<number | null>(null);
+  // capítulo atualmente aberto no painel direito (editor)
+  const [openChapterId, setOpenChapterId] = useState<number | null>(null);
 
   const [title, setTitle] = useState<string>("");
   const [description, setDescription] = useState<string>("");
@@ -323,8 +330,12 @@ export default function ChaptersPage() {
   // diagnóstico leve
   const [lastApiInfo, setLastApiInfo] = useState<string>("");
   const [showDiag, setShowDiag] = useState<boolean>(false);
+  const [showGuide, setShowGuide] = useState<boolean>(false);
 
+  // ✅ Header controls “estilo Memórias”
   const [q, setQ] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [sortKey, setSortKey] = useState<SortKey>("RECENT");
 
   const didFocusTitle = useRef(false);
   const didFocusDesc = useRef(false);
@@ -341,7 +352,6 @@ export default function ChaptersPage() {
   const snapshotRef = useRef<Snapshot | null>(null);
 
   const isDirty = useMemo(() => {
-    // 🔥 regra de ouro: durante loading/saving não tem prompt
     if (loading || saving) return false;
 
     const snap = snapshotRef.current;
@@ -462,7 +472,7 @@ export default function ChaptersPage() {
         () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "GET" }),
       ]);
 
-      if (seq !== listSeqRef.current) return; // ✅ resposta velha
+      if (seq !== listSeqRef.current) return;
 
       setApiInfo("LIST", result.usedPath || "—", result.attempts);
 
@@ -495,14 +505,12 @@ export default function ChaptersPage() {
               : null,
           created_at: String(x.created_at ?? x.createdAt ?? ""),
           updated_at: String(x.updated_at ?? x.updatedAt ?? ""),
-          published_at:
-            x.published_at != null ? String(x.published_at) : x.publishedAt != null ? String(x.publishedAt) : null,
+          published_at: x.published_at != null ? String(x.published_at) : x.publishedAt != null ? String(x.publishedAt) : null,
         }))
         .filter((x) => Number.isFinite(x.chapter_id) && x.chapter_id > 0);
 
       setItems(normalized);
 
-      // ✅ prioridade: deep-link da Timeline
       const pending = pendingOpenChapterIdRef.current;
       if (pending) {
         const exists = normalized.some((c) => c.chapter_id === pending);
@@ -526,12 +534,9 @@ export default function ChaptersPage() {
         }
       }
 
-      // seleção inicial (só se nada selecionado)
-      if (!selectedChapterId && normalized.length > 0) {
-        void loadDetail(normalized[0].chapter_id);
-      }
+      // ✅ Não auto-abrir editor: por padrão o painel direito fica em placeholder.
     } finally {
-      if (seq === listSeqRef.current) setLoading(false);
+      setLoading(false);
     }
   }
 
@@ -545,64 +550,67 @@ export default function ChaptersPage() {
 
     try {
       const result = await tryMany<any>([
-        () => apiRequest<any>(`/api/chapters/${chapterId}`, { method: "GET" }),
         () => apiRequest<any>(`/api/chapter/${chapterId}`, { method: "GET" }),
-        () => apiRequest<any>(`/api/authors/${authorId}/chapters/${chapterId}`, { method: "GET" }),
-        () => apiRequest<any>(`/api/author/${authorId}/chapters/${chapterId}`, { method: "GET" }),
+        () => apiRequest<any>(`/api/chapters/${chapterId}`, { method: "GET" }),
+        () => apiRequest<any>(`/api/chapter/detail/${chapterId}`, { method: "GET" }),
+        () => apiRequest<any>(`/api/chapters/detail/${chapterId}`, { method: "GET" }),
       ]);
 
-      if (seq !== detailSeqRef.current) return; // ✅ resposta velha
+      if (seq !== detailSeqRef.current) return;
 
       setApiInfo("DETAIL", result.usedPath || "—", result.attempts);
 
-      const d = unwrapDetail(result.data);
-
-      if (!result.ok || !d) {
+      if (!result.ok || !result.data) {
         const hint =
-          result.status === 401
-            ? "401 (token expirado). Faça login novamente."
-            : result.status === 404
-            ? "404 (rota não existe / id não encontrado)."
-            : `HTTP ${result.status || "erro"}`;
+          result.status === 401 ? "401 (token expirado)." : result.status === 404 ? "404 (não encontrado)." : `HTTP ${result.status || "erro"}`;
 
         setToastAuto({ kind: "err", msg: `Falha ao abrir capítulo (${hint}).` });
         return;
       }
 
-      const nextId = Number(d.chapter_id);
-      const nextTitle = String(d.title ?? "");
-      const nextDesc = String(d.description ?? "");
-      const nextStatus = toStatus(d.status);
+      const d = unwrapDetail(result.data);
+      if (!d) {
+        setToastAuto({ kind: "err", msg: "Resposta inválida ao abrir capítulo." });
+        return;
+      }
 
-      const v =
-        d.current_version_id && Number.isFinite(Number(d.current_version_id)) ? `v${Number(d.current_version_id)}` : "v1";
+      setSelectedChapterId(chapterId);
+      setOpenChapterId(chapterId);
 
-      const fromCurrent = (result.data as any)?.current_version?.body;
-      const flat = typeof (d as any).body === "string" ? (d as any).body : null;
-      const nextBody = typeof fromCurrent === "string" ? fromCurrent : flat !== null ? flat : "";
+      setTitle(String(d.title ?? ""));
+      setDescription(String(d.description ?? ""));
+      setBody(normText((d as any).body ?? (d as any).content ?? ""));
 
-      // aplica state
-      setSelectedChapterId(nextId);
-      setTitle(nextTitle);
-      setDescription(nextDesc);
-      setStatus(nextStatus);
-      setVersionLabel(v);
-      setCreatedAt(formatDateBR(d.created_at));
-      setUpdatedAt(formatDateBR(d.updated_at));
-      setPublishedAt(d.published_at ? formatDateBR(d.published_at) : "—");
-      setBody(nextBody);
+      const st = toStatus((d as any).status);
+      setStatus(st);
+
+      setCreatedAt(formatDateBR((d as any).created_at ?? (d as any).createdAt ?? null));
+      setUpdatedAt(formatDateBR((d as any).updated_at ?? (d as any).updatedAt ?? null));
+      setPublishedAt(formatDateBR((d as any).published_at ?? (d as any).publishedAt ?? null));
+
+      const curVer =
+        (d as any).current_version_id != null
+          ? Number((d as any).current_version_id)
+          : (d as any).currentVersionId != null
+          ? Number((d as any).currentVersionId)
+          : null;
+      setVersionLabel(curVer ? `v${curVer}` : "v1");
+
+      snapshotRef.current = normSnap({
+        title: String(d.title ?? ""),
+        description: String(d.description ?? ""),
+        body: normText((d as any).body ?? (d as any).content ?? ""),
+        status: st,
+      });
 
       didFocusTitle.current = false;
       didFocusDesc.current = false;
-
-      // ✅ snapshot SEMPRE derivado dos mesmos valores aplicados acima
-      snapshotRef.current = normSnap({ title: nextTitle, description: nextDesc, body: nextBody, status: nextStatus });
     } finally {
-      if (seq === detailSeqRef.current) setLoading(false);
+      setLoading(false);
     }
   }
 
-  async function createChapter() {
+  async function createChapter(preset?: { title: string; description?: string | null }) {
     if (needAuthGuard()) return;
     if (!confirmIfDirty("Criar novo capítulo")) return;
 
@@ -611,8 +619,8 @@ export default function ChaptersPage() {
 
     try {
       const payload = {
-        title: DEFAULT_NEW_TITLE,
-        description: DEFAULT_NEW_DESCRIPTION,
+        title: preset?.title ?? DEFAULT_NEW_TITLE,
+        description: preset?.description ?? DEFAULT_NEW_DESCRIPTION,
         body: "",
         status: "DRAFT",
       };
@@ -658,36 +666,36 @@ export default function ChaptersPage() {
     }
   }
 
-  async function saveChapter() {
-    if (!selectedChapterId) return;
-    if (needAuthGuard()) return;
+  async function reloadSelected() {
+    if (!openChapterId) return;
+    if (!confirmIfDirty("Recarregar capítulo")) return;
+    await loadDetail(openChapterId);
+    setToastAuto({ kind: "ok", msg: "Capítulo recarregado." });
+  }
 
-    const t = String(title ?? "").trim();
-    if (!t) {
-      setToastAuto({ kind: "warn", msg: "Título é obrigatório." });
-      return;
-    }
+  async function saveDraft() {
+    if (needAuthGuard()) return;
+    if (!openChapterId) return;
 
     setSaving(true);
     setToast(null);
 
     try {
       const payload = {
-        title: t,
+        title: safeTrimOrNull(title) ?? "",
         description: safeTrimOrNull(description),
-        body: String(body ?? ""),
+        body: body ?? "",
+        status: "DRAFT",
       };
 
       const result = await tryMany<any>([
-        () => apiRequest<any>(`/api/chapters/${selectedChapterId}`, { method: "PUT", body: JSON.stringify(payload) }),
-        () => apiRequest<any>(`/api/chapter/${selectedChapterId}`, { method: "PUT", body: JSON.stringify(payload) }),
         () =>
-          apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}`, {
+          apiRequest<any>(`/api/chapter/${openChapterId}`, {
             method: "PUT",
             body: JSON.stringify(payload),
           }),
         () =>
-          apiRequest<any>(`/api/author/${authorId}/chapters/${selectedChapterId}`, {
+          apiRequest<any>(`/api/chapters/${openChapterId}`, {
             method: "PUT",
             body: JSON.stringify(payload),
           }),
@@ -697,59 +705,51 @@ export default function ChaptersPage() {
 
       if (!result.ok) {
         const hint =
-          result.status === 401
-            ? "401 (token expirado). Faça login novamente."
-            : result.status === 404
-            ? "404 (rota de update não existe no backend)."
-            : `HTTP ${result.status || "erro"}`;
-
+          result.status === 401 ? "401 (token expirado)." : result.status === 404 ? "404 (rota não existe)." : `HTTP ${result.status || "erro"}`;
         setToastAuto({ kind: "err", msg: `Falha ao salvar (${hint}).` });
         return;
       }
 
-      // ✅ snapshot imediato do que está na tela (normalizado)
       snapshotRef.current = normSnap({
-        title: t,
-        description: String(description ?? ""),
-        body: String(body ?? ""),
-        status,
+        title: normTitle(title),
+        description: normDesc(description),
+        body: normText(body),
+        status: "DRAFT",
       });
 
-      setToastAuto({ kind: "ok", msg: "Salvo." });
-
-      // resync (sem gerar dirty)
+      setStatus("DRAFT");
+      setToastAuto({ kind: "ok", msg: "Salvo (rascunho)." });
       await loadList();
-      await loadDetail(selectedChapterId);
     } finally {
       setSaving(false);
     }
   }
 
-  async function publishChapter() {
-    if (!selectedChapterId) return;
+  async function publish() {
     if (needAuthGuard()) return;
-
-    if (isDirty) {
-      setToastAuto({ kind: "warn", msg: "Você tem alterações não salvas. Salve antes de publicar." });
-      return;
-    }
+    if (!openChapterId) return;
 
     setSaving(true);
     setToast(null);
 
     try {
+      const payload = {
+        title: safeTrimOrNull(title) ?? "",
+        description: safeTrimOrNull(description),
+        body: body ?? "",
+        status: "PUBLIC",
+      };
+
       const result = await tryMany<any>([
-        () => apiRequest<any>(`/api/chapters/${selectedChapterId}/publish`, { method: "POST" }),
-        () => apiRequest<any>(`/api/chapter/${selectedChapterId}/publish`, { method: "POST" }),
-        () => apiRequest<any>(`/api/chapters/${selectedChapterId}/publicar`, { method: "POST" }),
-        () => apiRequest<any>(`/api/chapter/${selectedChapterId}/publicar`, { method: "POST" }),
         () =>
-          apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}/publish`, {
-            method: "POST",
+          apiRequest<any>(`/api/chapter/${openChapterId}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
           }),
         () =>
-          apiRequest<any>(`/api/author/${authorId}/chapters/${selectedChapterId}/publish`, {
-            method: "POST",
+          apiRequest<any>(`/api/chapters/${openChapterId}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
           }),
       ]);
 
@@ -757,426 +757,448 @@ export default function ChaptersPage() {
 
       if (!result.ok) {
         const hint =
-          result.status === 401
-            ? "401 (token expirado). Faça login novamente."
-            : result.status === 404
-            ? "404 (rota de publish não existe no backend)."
-            : `HTTP ${result.status || "erro"}`;
-
+          result.status === 401 ? "401 (token expirado)." : result.status === 404 ? "404 (rota não existe)." : `HTTP ${result.status || "erro"}`;
         setToastAuto({ kind: "err", msg: `Falha ao publicar (${hint}).` });
         return;
       }
 
+      setStatus("PUBLIC");
+
+      snapshotRef.current = normSnap({
+        title: normTitle(title),
+        description: normDesc(description),
+        body: normText(body),
+        status: "PUBLIC",
+      });
+
       setToastAuto({ kind: "ok", msg: "Publicado." });
-
       await loadList();
-      await loadDetail(selectedChapterId);
+      await loadDetail(openChapterId);
     } finally {
       setSaving(false);
     }
   }
 
-  async function unpublishChapter() {
-    if (!selectedChapterId) return;
-    if (needAuthGuard()) return;
+  function clearSelection() {
+    if (!confirmIfDirty("Fechar editor")) return;
 
-    if (isDirty) {
-      setToastAuto({ kind: "warn", msg: "Você tem alterações não salvas. Salve antes de despublicar." });
-      return;
-    }
-
-    setSaving(true);
-    setToast(null);
-
-    try {
-      const result = await tryMany<any>([
-        () => apiRequest<any>(`/api/chapters/${selectedChapterId}/unpublish`, { method: "POST" }),
-        () => apiRequest<any>(`/api/chapter/${selectedChapterId}/unpublish`, { method: "POST" }),
-        () => apiRequest<any>(`/api/chapters/${selectedChapterId}/despublicar`, { method: "POST" }),
-        () => apiRequest<any>(`/api/chapter/${selectedChapterId}/despublicar`, { method: "POST" }),
-        () =>
-          apiRequest<any>(`/api/authors/${authorId}/chapters/${selectedChapterId}/unpublish`, {
-            method: "POST",
-          }),
-        () =>
-          apiRequest<any>(`/api/author/${authorId}/chapters/${selectedChapterId}/unpublish`, {
-            method: "POST",
-          }),
-      ]);
-
-      setApiInfo("UNPUBLISH", result.usedPath || "—", result.attempts);
-
-      if (!result.ok) {
-        const hint =
-          result.status === 401
-            ? "401 (token expirado). Faça login novamente."
-            : result.status === 404
-            ? "404 (rota de unpublish não existe no backend)."
-            : `HTTP ${result.status || "erro"}`;
-
-        setToastAuto({ kind: "err", msg: `Falha ao despublicar (${hint}).` });
-        return;
-      }
-
-      setToastAuto({ kind: "ok", msg: "Despublicado." });
-
-      await loadList();
-      await loadDetail(selectedChapterId);
-    } finally {
-      setSaving(false);
-    }
+    setSelectedChapterId(null);
+    setOpenChapterId(null);
+    setTitle("");
+    setDescription("");
+    setBody("");
+    setStatus("DRAFT");
+    setVersionLabel("v1");
+    setCreatedAt("—");
+    setUpdatedAt("—");
+    setPublishedAt("—");
+    snapshotRef.current = null;
+    didFocusTitle.current = false;
+    didFocusDesc.current = false;
   }
-
-  const headerCount = items.length;
 
   const filteredItems = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return items;
-    return items.filter((c) => {
-      const t = (c.title ?? "").toLowerCase();
-      const d = (c.description ?? "").toLowerCase();
-      return t.includes(needle) || d.includes(needle);
-    });
-  }, [items, q]);
 
-  // ✅ monta uma vez: loadList quando token+authorId estiverem ok
-  const bootedRef = useRef(false);
+    let list = items.slice();
+
+    if (statusFilter !== "ALL") {
+      list = list.filter((c) => c.status === statusFilter);
+    }
+
+    if (needle) {
+      list = list.filter((c) => {
+        const t = String(c.title ?? "").toLowerCase();
+        const d = String(c.description ?? "").toLowerCase();
+        return t.includes(needle) || d.includes(needle);
+      });
+    }
+
+    list.sort((a, b) => {
+      const da = new Date(a.updated_at || a.created_at || 0).getTime();
+      const db = new Date(b.updated_at || b.created_at || 0).getTime();
+      return sortKey === "RECENT" ? db - da : da - db;
+    });
+
+    return list;
+  }, [items, q, statusFilter, sortKey]);
+
+  const selectedTitlePreview = useMemo(() => {
+    const found = items.find((x) => x.chapter_id === openChapterId);
+    return found?.title?.trim() ? found.title : "capítulo";
+  }, [items, openChapterId]);
+
   useEffect(() => {
-    if (bootedRef.current) return;
-    if (!token || !authorId) return;
-    bootedRef.current = true;
+    if (!canUseApi) {
+      setToastAuto({ kind: "warn", msg: "Token ausente. Faça login para ver/editar capítulos." });
+      return;
+    }
     void loadList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, authorId]);
+  }, [canUseApi]);
 
-  const selectedTitlePreview = title?.trim() ? title.trim() : selectedChapterId ? "Capítulo" : "—";
-
-  const badgeToneClass = (s: ChapterStatus) => (s === "PUBLIC" ? "badge-public" : "badge-draft");
+  const totalCount = items.length;
+  const filteredCount = filteredItems.length;
 
   return (
-    <div className="hdud-page">
-      <div className="hdud-container" style={{ margin: "0 auto" }}>
-        {/* Header (padrão HDUD) */}
-        <div className="hdud-card">
-          <div className="hdud-pagehead">
-            <div style={{ minWidth: 0 }}>
-              <h1 className="hdud-pagehead-title">Sua jornada</h1>
-              <p className="hdud-pagehead-subtitle">
-                Aqui você organiza sua história em <b>capítulos</b> (fases). Entre em um capítulo, escreva, refine e publique quando quiser.{" "}
-                <span style={{ opacity: 0.85 }}>Memórias/Timeline continuam no core — fora desta tela.</span>
-              </p>
-            </div>
-
-            <div className="hdud-actions">
-              <div style={styles.pill}>jornada • capítulos = fases • escrita com calma</div>
-
-              <button
-                className="hdud-btn"
-                onClick={() => {
-                  if (loading || saving) return;
-                  if (!confirmIfDirty("Atualizar lista")) return;
-                  void loadList();
-                }}
-                disabled={loading || saving}
-                title="Recarrega lista e, se necessário, seleciona o primeiro"
-              >
-                Atualizar
-              </button>
-
-              <button
-                className="hdud-btn hdud-btn-primary"
-                onClick={createChapter}
-                disabled={saving}
-                title="Cria um capítulo rascunho no banco"
-              >
-                + Novo capítulo
-              </button>
-            </div>
-          </div>
-
-          {/* Meta + diagnóstico */}
-          <div style={styles.headerMeta}>
-            <div style={styles.metaRow}>
-              <span style={styles.smallMuted}>
-                {authorId ? `author_id: ${authorId}` : "author_id: —"} • {headerCount} capítulo(s)
-                {isDirty ? (
-                  <span style={styles.dirtyDot} title="Alterações não salvas">
-                    {" "}
-                    • ● não salvo
-                  </span>
-                ) : null}
-              </span>
-
-              <button
-                type="button"
-                className="hdud-btn"
-                style={styles.diagBtn}
-                onClick={() => setShowDiag((v) => !v)}
-                title="Mostrar/ocultar diagnóstico de rotas (sem tocar API)"
-              >
-                {showDiag ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
-              </button>
-            </div>
-
-            {showDiag && (
-              <div style={styles.diagBox}>
-                <div style={styles.diagLine}>
-                  <b>API</b>: {lastApiInfo || "—"}
-                </div>
-                <div style={styles.diagLine}>
-                  <b>DIRTY</b>: {dirtyInfo}
-                </div>
-                <div style={styles.diagHint}>*diagnóstico local (rota que funcionou + tentativas). Não altera API.*</div>
+    <div style={{ padding: 0, color: "var(--hdud-text)" }}>
+      <div style={styles.pageWrap}>
+        {/* =========================
+            HEADER (estilo Memórias)
+           ========================= */}
+        <div className="hdud-card" style={styles.headerCard}>
+          <div style={styles.headerTopRow}>
+            <div>
+              <div style={styles.h1}>Capítulos</div>
+              <div style={styles.hSub}>
+                Organize sua história em fases. Crie, refine e publique quando quiser. <b>Memórias/Timeline</b> continuam no core.
               </div>
-            )}
+
+              <div style={styles.metaLine}>
+                <span style={styles.metaBadge}>author_id: {authorId ?? "—"}</span>
+                <span style={styles.metaBadge}>{totalCount} item(ns)</span>
+                {statusFilter !== "ALL" ? <span style={styles.metaBadge}>filtro: {statusFilter === "PUBLIC" ? "públicos" : "rascunhos"}</span> : null}
+                {q.trim() ? <span style={styles.metaBadge}>busca: “{compactText(q.trim(), 18)}”</span> : null}
+              </div>
+            </div>
+
+            <div style={styles.headerCTACol}>
+              <button className="hdud-btn hdud-btn-primary" onClick={() => createChapter()} disabled={loading || saving} style={styles.ctaBtn}>
+                + Criar capítulo
+              </button>
+            </div>
           </div>
 
-          {/* Toast padronizado */}
+          <div style={styles.headerControlsRow}>
+            <input
+              className="hdud-input"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Buscar (título ou descrição)..."
+              style={styles.searchInput}
+            />
+
+            <select className="hdud-input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} style={styles.select}>
+              <option value="ALL">Status: Todos</option>
+              <option value="DRAFT">Status: Rascunhos</option>
+              <option value="PUBLIC">Status: Públicos</option>
+            </select>
+
+            <select className="hdud-input" value={sortKey} onChange={(e) => setSortKey(e.target.value as any)} style={styles.select}>
+              <option value="RECENT">Mais recentes</option>
+              <option value="OLD">Mais antigos</option>
+            </select>
+
+            <div style={{ flex: 1 }} />
+
+            <button className="hdud-btn" onClick={() => loadList()} disabled={loading || saving}>
+              {loading ? "Atualizando..." : "Atualizar"}
+            </button>
+
+            <button className="hdud-btn" onClick={() => setShowDiag((v) => !v)} disabled={loading || saving}>
+              {showDiag ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
+            </button>
+          </div>
+
           {toast && (
             <div
-              className={[
-                "hdud-alert",
-                toast.kind === "ok"
-                  ? "hdud-alert-success"
-                  : toast.kind === "warn"
-                  ? "hdud-alert-warn"
-                  : "hdud-alert-danger",
-              ].join(" ")}
-              style={{ marginTop: 10 }}
+              style={{
+                marginTop: 12,
+                padding: 10,
+                borderRadius: 10,
+                border: "1px solid var(--hdud-border)",
+                background:
+                  toast.kind === "ok" ? "rgba(52, 199, 89, 0.10)" : toast.kind === "warn" ? "rgba(255, 204, 0, 0.10)" : "rgba(255, 59, 48, 0.10)",
+              }}
             >
-              {toast.msg}
+              <b style={{ textTransform: "uppercase", fontSize: 11, opacity: 0.8 }}>{toast.kind}</b> — {toast.msg}
             </div>
           )}
 
-          {!canUseApi ? (
-            <div className="hdud-alert hdud-alert-warn" style={{ marginTop: 12 }}>
-              Token ausente. Faça login para ver/editar capítulos.
+          {showDiag && (
+            <div style={styles.diagBox}>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>Diagnóstico</div>
+              <div style={styles.diagLine}>token: {token ? "OK" : "—"}</div>
+              <div style={styles.diagLine}>authorId (JWT): {authorId ?? "—"}</div>
+              <div style={styles.diagLine}>API: {lastApiInfo || "—"}</div>
+              <div style={styles.diagLine}>isDirty: {String(isDirty)}</div>
+              <div style={styles.diagLine}>dirtyInfo: {dirtyInfo}</div>
             </div>
-          ) : null}
+          )}
         </div>
 
-        {/* Grid principal */}
-        <div style={styles.grid}>
-          {/* left: list */}
-          <div className="hdud-card">
-            <div style={styles.listHeader}>
-              <div>
-                <div style={styles.cardTitle}>Etapas da sua jornada</div>
-                <div style={styles.cardMeta}>Fases/estruturas da sua história</div>
-              </div>
-              <div style={styles.cardMetaRight}>
-                <div style={styles.cardMeta}>{items.length} item(ns)</div>
-              </div>
+        {/* =========================
+            HISTÓRICO (estilo Memórias)
+           ========================= */}
+        <div className="hdud-card" style={{ marginTop: 18 }}>
+          <div style={styles.historyHeader}>
+            <div style={styles.historyTitle}>Histórico</div>
+            <div style={styles.historyRight}>
+              <span style={styles.historyPill}>{filteredCount} item(ns)</span>
             </div>
+          </div>
 
-            <div style={styles.searchRow}>
-              <input
-                className="hdud-input"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Buscar por título ou descrição…"
-                aria-label="Buscar capítulos"
-              />
-              {q.trim() ? (
-                <button className="hdud-btn" onClick={() => setQ("")} title="Limpar busca">
-                  Limpar
-                </button>
-              ) : null}
-            </div>
-
-            {items.length === 0 ? (
-              <div style={styles.emptyBox}>
-                <div style={styles.emptyTitle}>Sua casa ainda está vazia.</div>
-                <div style={styles.emptyText}>
-                  Crie seu primeiro <b>capítulo</b> (uma fase da sua vida). Depois, você entra nele e escreve com calma — sem pressa.
-                </div>
-                <button className="hdud-btn hdud-btn-primary" style={{ marginTop: 10 }} onClick={createChapter} disabled={saving}>
-                  + Criar meu primeiro capítulo
-                </button>
-              </div>
-            ) : filteredItems.length === 0 ? (
-              <div style={styles.emptyBox}>
-                Nenhum capítulo encontrado para <b>{q.trim()}</b>.
-              </div>
-            ) : (
-              <div style={styles.listWrap}>
+          <div style={styles.historyBodyGrid}>
+            {/* LEFT LIST */}
+            <div style={styles.leftCol}>
+              <div style={styles.leftList}>
                 {filteredItems.map((c) => {
-                  const isSelected = c.chapter_id === selectedChapterId;
-                  const badgeClass = badgeToneClass(c.status);
+                  const isSel = c.chapter_id === selectedChapterId;
+                  const statusLabel = c.status === "PUBLIC" ? "Público" : "Rascunho";
 
                   return (
-                    <button
+                    <div
                       key={c.chapter_id}
-                      style={{ ...styles.itemBtn, ...(isSelected ? styles.itemBtnActive : {}) }}
-                      onClick={() => {
-                        if (loading || saving) return;
-                        if (c.chapter_id !== selectedChapterId) {
-                          if (!confirmIfDirty("Trocar de capítulo")) return;
-                        }
-                        void loadDetail(c.chapter_id);
+                      style={{
+                        ...styles.itemCard,
+                        outline: isSel ? "2px solid rgba(0,0,0,0.12)" : "none",
+                        background: isSel ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.02)",
                       }}
-                      title="Abrir capítulo"
+                      onClick={() => {
+                        if (isSel) return;
+                        // clique no card só seleciona (não abre editor)
+                        if (openChapterId && isDirty && !confirmIfDirty("Selecionar capítulo (sem abrir editor)")) return;
+                        setSelectedChapterId(c.chapter_id);
+                      }}
+                      role="button"
                     >
-                      <div style={styles.itemTop}>
+                      <div style={styles.itemTopRow}>
                         <div style={styles.itemTitle}>
-                          <b>{c.title || "Sem título"}</b>
-                          <span style={styles.itemId}>#{c.chapter_id}</span>
+                          {c.title || `Capítulo #${c.chapter_id}`}{" "}
+                          <span style={{ opacity: 0.7, fontWeight: 800, fontSize: 12 }}>#{c.chapter_id}</span>
                         </div>
 
-                        <span
-                          style={{
-                            ...styles.badge,
-                            ...(c.status === "PUBLIC" ? styles.badgePublic : styles.badgeDraft),
-                          }}
-                          className={badgeClass}
-                        >
-                          {c.status === "PUBLIC" ? "Público" : "Rascunho"}
-                        </span>
+                        <span style={styles.statusPill}>{statusLabel}</span>
                       </div>
 
-                      <div style={styles.itemDesc}>{c.description || "—"}</div>
+                      {c.description ? <div style={styles.itemDesc}>{compactText(String(c.description), 110)}</div> : null}
 
                       <div style={styles.itemMeta}>
-                        Atualizado: {formatDateBR(c.updated_at)} • Criado: {formatDateBR(c.created_at)}
+                        <span>{formatDateBR(c.updated_at)}</span>
+                        <span style={{ opacity: 0.6 }}>•</span>
+                        <span>{c.status === "PUBLIC" ? "publicado" : "editável"}</span>
                       </div>
-                    </button>
+
+                      <div style={styles.itemActions}>
+                        <button
+                          className="hdud-btn"
+                          style={{ padding: "6px 10px" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!confirmIfDirty("Abrir capítulo para editar")) return;
+                            void loadDetail(c.chapter_id);
+                          }}
+                        >
+                          Abrir
+                        </button>
+                      </div>
+                    </div>
                   );
                 })}
-              </div>
-            )}
-          </div>
 
-          {/* right: editor */}
-          <div className="hdud-card" style={{ minHeight: 420 }}>
-            <div style={styles.editorHeader}>
-              <div>
-                <div style={styles.cardTitle}>Escrevendo</div>
-                <div style={styles.cardMeta}>
-                  Criado: {createdAt} • Última atualização: {updatedAt} • Publicado: {publishedAt}
-                </div>
-              </div>
-
-              <div style={styles.editorBadges}>
-                <span style={styles.badgeSoft}>ID {selectedChapterId ?? "—"}</span>
-                <span style={styles.badgeSoft}>{versionLabel}</span>
-                <span
-                  style={{
-                    ...styles.badge,
-                    ...(status === "PUBLIC" ? styles.badgePublic : styles.badgeDraft),
-                  }}
-                >
-                  {status === "PUBLIC" ? "Público" : "Rascunho"}
-                </span>
-              </div>
-
-              <div style={styles.editorActions}>
-                <button
-                  className="hdud-btn"
-                  onClick={() => {
-                    if (!selectedChapterId) return;
-                    if (!confirmIfDirty("Recarregar capítulo (perde mudanças locais)")) return;
-                    void loadDetail(selectedChapterId);
-                  }}
-                  disabled={loading || saving || !selectedChapterId}
-                >
-                  Recarregar
-                </button>
-
-                <button
-                  className="hdud-btn hdud-btn-primary"
-                  onClick={saveChapter}
-                  disabled={saving || loading || !selectedChapterId}
-                >
-                  Salvar
-                </button>
-
-                {status === "PUBLIC" ? (
-                  <button className="hdud-btn" onClick={unpublishChapter} disabled={saving || loading || !selectedChapterId}>
-                    Despublicar
-                  </button>
-                ) : (
-                  <button className="hdud-btn" onClick={publishChapter} disabled={saving || loading || !selectedChapterId}>
-                    Publicar
-                  </button>
-                )}
+                {!filteredItems.length ? (
+                  <div style={styles.emptyList}>
+                    <div style={{ fontWeight: 900 }}>Nada encontrado</div>
+                    <div style={{ opacity: 0.75, marginTop: 6 }}>Tente limpar filtros ou criar um capítulo novo.</div>
+                  </div>
+                ) : null}
               </div>
             </div>
 
-            {!selectedChapterId ? (
-              <div style={styles.rightEmpty}>
-                <div style={styles.rightEmptyTitle}>Escolha uma etapa</div>
-                <div style={styles.rightEmptyText}>
-                  À esquerda, selecione um capítulo (uma fase). Aqui você escreve e refina o texto do capítulo, sem pressão.
-                </div>
-              </div>
-            ) : (
-              <div style={styles.form}>
-                <label style={styles.label}>
-                  <span style={styles.labelTop}>Título (livre)</span>
-                  <input
-                    className="hdud-input"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    onFocus={() => {
-                      if (!didFocusTitle.current) {
-                        didFocusTitle.current = true;
-                        if (selectedChapterId && title === DEFAULT_NEW_TITLE) setTitle("");
+            {/* RIGHT PANEL */}
+            <div style={styles.rightCol}>
+              {!openChapterId ? (
+                <div style={styles.rightEmpty}>
+                  <div style={styles.rightEmptyKicker}>Sua jornada começa aqui</div>
+                  <div style={styles.rightEmptyTitle}>Escolha uma etapa</div>
+                  <div style={styles.rightEmptyText}>
+                    Clique em um capítulo à esquerda para editar — ou crie uma nova fase com <b>+ Criar capítulo</b>.
+                    <br />
+                    O editor só aparece quando existe um capítulo “em foco”. Isso deixa a tela limpa e com cara de produto.
+                  </div>
+
+                  <div style={styles.rightEmptyDivider} />
+
+                  <div style={styles.rightEmptySectionTitle}>Sugestões rápidas</div>
+                  <div style={styles.rightEmptyText}>Crie uma etapa com um clique (rascunho) para acelerar a demo:</div>
+
+                  <div style={styles.quickRow}>
+                    <button
+                      className="hdud-btn"
+                      onClick={() =>
+                        createChapter({
+                          title: "Infância",
+                          description: "As primeiras cenas: casa, pessoas, rotina e o que ficou marcado.",
+                        })
                       }
-                    }}
-                    placeholder="Ex.: Minha chegada ao mundo"
-                  />
-                  <span style={styles.counter}>{title.trim().length}/200</span>
-                </label>
+                      disabled={loading || saving}
+                    >
+                      + Infância
+                    </button>
 
-                <label style={styles.label}>
-                  <span style={styles.labelTop}>Descrição (uma frase)</span>
-                  <input
-                    className="hdud-input"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    onFocus={() => {
-                      if (!didFocusDesc.current) {
-                        didFocusDesc.current = true;
-                        if (selectedChapterId && description === DEFAULT_NEW_DESCRIPTION) setDescription("");
+                    <button
+                      className="hdud-btn"
+                      onClick={() =>
+                        createChapter({
+                          title: "Adolescência",
+                          description: "Amizades, viradas, descobertas, medos e o começo do “eu”.",
+                        })
                       }
-                    }}
-                    placeholder={DEFAULT_NEW_DESCRIPTION}
-                  />
-                  <span style={styles.counter}>{description.trim().length}/400</span>
-                </label>
+                      disabled={loading || saving}
+                    >
+                      + Adolescência
+                    </button>
 
-                <label style={styles.label}>
-                  <span style={styles.labelTop}>Texto do capítulo</span>
-                  <textarea
-                    className="hdud-textarea"
-                    value={body}
-                    onChange={(e) => setBody(e.target.value)}
-                    placeholder="Escreva aqui…"
-                    style={{ minHeight: 220 }}
-                  />
-                  <span style={styles.counter}>{(body || "").length} caracteres</span>
-                </label>
+                    <button
+                      className="hdud-btn"
+                      onClick={() =>
+                        createChapter({
+                          title: "Vida adulta",
+                          description: "Trabalho, escolhas, quedas e construções — o que você virou.",
+                        })
+                      }
+                      disabled={loading || saving}
+                    >
+                      + Vida adulta
+                    </button>
 
-                <div style={styles.noteMuted}>
-                  Nota: esta tela é “camada narrativa” determinística. Integração com IA/geração entra depois, sem mexer no core.
+                    <button
+                      className="hdud-btn"
+                      onClick={() =>
+                        createChapter({
+                          title: "Agora",
+                          description: "O presente: o que está acontecendo e para onde você quer ir.",
+                        })
+                      }
+                      disabled={loading || saving}
+                    >
+                      + Agora
+                    </button>
+                  </div>
+
+                  <div style={styles.rightEmptyDivider} />
+
+                  <div style={styles.rightEmptySectionTitle}>Como escrever aqui</div>
+                  <ul style={styles.quickList}>
+                    <li>1–2 frases sobre o cenário (onde/como era a vida).</li>
+                    <li>As pessoas centrais e por quê.</li>
+                    <li>A virada: o antes e o depois.</li>
+                  </ul>
+
+                  <div style={styles.rightEmptyHint}>Dica: você pode criar como rascunho agora e publicar depois — sem pressa.</div>
                 </div>
-              </div>
-            )}
+              ) : (
+                <div style={styles.form}>
+                  <div style={styles.formHeader}>
+                    <div>
+                      <div style={styles.formTitle}>REGISTRAR</div>
+                      <div style={styles.formMeta}>
+                        Criado: {createdAt} • Última atualização: {updatedAt} • Publicado: {publishedAt}
+                      </div>
+                    </div>
+
+                    <div style={styles.formBadges}>
+                      <span style={styles.badge}>ID {openChapterId ?? "—"}</span>
+                      <span style={styles.badge}>{versionLabel}</span>
+                      <span style={styles.badge}>{status === "PUBLIC" ? "Público" : "Rascunho"}</span>
+                    </div>
+                  </div>
+
+                  <div style={styles.formActions}>
+                    <button className="hdud-btn" onClick={reloadSelected} disabled={loading || saving}>
+                      Recarregar
+                    </button>
+
+                    <button className="hdud-btn hdud-btn-primary" onClick={saveDraft} disabled={loading || saving || !openChapterId}>
+                      {saving ? "Salvando..." : "Salvar"}
+                    </button>
+
+                    <button className="hdud-btn" onClick={publish} disabled={loading || saving || !openChapterId}>
+                      Publicar
+                    </button>
+
+                    <button className="hdud-btn" onClick={clearSelection} disabled={loading || saving}>
+                      Fechar
+                    </button>
+                  </div>
+
+                  <label style={styles.label}>
+                    <span style={styles.labelTop}>Título (livre)</span>
+                    <input
+                      className="hdud-input"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      onFocus={() => {
+                        if (!didFocusTitle.current) {
+                          didFocusTitle.current = true;
+                          if (openChapterId && title === DEFAULT_NEW_TITLE) setTitle("");
+                        }
+                      }}
+                      placeholder="Ex.: Minha chegada ao mundo"
+                    />
+                    <span style={styles.counter}>{title.trim().length} / 120</span>
+                  </label>
+
+                  <label style={styles.label}>
+                    <span style={styles.labelTop}>Descrição curta (opcional)</span>
+                    <textarea
+                      className="hdud-input"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      onFocus={() => {
+                        if (!didFocusDesc.current) {
+                          didFocusDesc.current = true;
+                          if (openChapterId && description === DEFAULT_NEW_DESCRIPTION) setDescription("");
+                        }
+                      }}
+                      placeholder="Uma frase curta sobre essa fase"
+                      style={{ minHeight: 70, resize: "vertical" }}
+                    />
+                    <span style={styles.counter}>{description.trim().length} / 220</span>
+                  </label>
+
+                  <label style={styles.label}>
+                    <span style={styles.labelTop}>Texto do capítulo</span>
+                    <textarea
+                      className="hdud-input"
+                      value={body}
+                      onChange={(e) => setBody(e.target.value)}
+                      placeholder="Escreva com calma. Isso é o mapa da sua vida."
+                      style={{ minHeight: 260, resize: "vertical", fontFamily: "inherit" }}
+                    />
+                    <span style={styles.counter}>{body.trim().length} caracteres</span>
+                  </label>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Guia (mantém premium) */}
+        {/* Guia (mantido) */}
         <div className="hdud-card" style={{ marginTop: 18 }}>
-          <div style={styles.suggestTitle}>
-            Guia de escrita (opcional) — <b>{selectedTitlePreview}</b>
+          <div style={styles.suggestHeader}>
+            <div style={styles.suggestTitle}>
+              Guia de escrita (opcional) — <b>{selectedTitlePreview}</b>
+            </div>
+
+            <button className="hdud-btn" onClick={() => setShowGuide((v) => !v)} title="Alternar guia de escrita">
+              {showGuide ? "Ocultar" : "Mostrar"}
+            </button>
           </div>
-          <ul style={styles.suggestList}>
-            <li>Qual cenário define essa fase (casa, cidade, rotina, clima, época)?</li>
-            <li>Quem são as pessoas centrais aqui? O que elas significam para você?</li>
-            <li>Qual foi a virada (o antes e o depois)?</li>
-            <li>Gancho do seu texto: {body ? `${compactText(body, 48)}` : "(ainda vazio)"}</li>
-          </ul>
-          <div style={styles.suggestHint}>*isso é só guia premium de escrita (determinístico)*</div>
+
+          {showGuide ? (
+            <>
+              <ul style={styles.suggestList}>
+                <li>Qual cenário define essa fase (casa, cidade, rotina, clima, época)?</li>
+                <li>Quem são as pessoas centrais aqui? O que elas significam para você?</li>
+                <li>Qual foi a virada (o antes e o depois)?</li>
+                <li>Gancho do seu texto: {body ? `${compactText(body, 48)}` : "(ainda vazio)"}</li>
+              </ul>
+              <div style={styles.suggestHint}>*isso é só guia premium de escrita (determinístico)*</div>
+            </>
+          ) : (
+            <div style={styles.suggestCollapsed}>Três perguntas para destravar a escrita — aberto quando você quiser.</div>
+          )}
         </div>
       </div>
     </div>
@@ -1184,129 +1206,136 @@ export default function ChaptersPage() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  grid: { display: "grid", gridTemplateColumns: "360px 1fr", gap: 18, alignItems: "start", marginTop: 18 },
+  pageWrap: { width: "100%", maxWidth: 1920, margin: "0 auto", padding: "18px 18px", boxSizing: "border-box" },
 
-  pill: {
-    background: "var(--hdud-surface-2)",
-    border: "1px solid var(--hdud-border)",
-    padding: "6px 10px",
-    borderRadius: 999,
+  headerCard: {},
+  headerTopRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" },
+  headerCTACol: { display: "flex", alignItems: "flex-start", justifyContent: "flex-end" },
+  ctaBtn: { paddingLeft: 14, paddingRight: 14 },
+
+  h1: { fontSize: 44, fontWeight: 950, letterSpacing: -0.9, margin: 0, lineHeight: 1.05 },
+  hSub: { opacity: 0.78, fontSize: 13, marginTop: 8, lineHeight: 1.35, maxWidth: 760 },
+
+  metaLine: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 },
+  metaBadge: {
     fontSize: 12,
-    opacity: 0.9,
-    fontWeight: 900,
-  },
-
-  headerMeta: { marginTop: 10 },
-  metaRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" },
-  smallMuted: { fontSize: 12, opacity: 0.7 },
-  dirtyDot: { fontSize: 12, fontWeight: 900, opacity: 0.85 },
-
-  diagBtn: { borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 900, opacity: 0.8 },
-  diagBox: {
-    marginTop: 10,
-    border: "1px dashed var(--hdud-border)",
+    opacity: 0.85,
+    border: "1px solid var(--hdud-border)",
     background: "var(--hdud-surface-2)",
-    borderRadius: 12,
-    padding: 10,
+    padding: "4px 10px",
+    borderRadius: 999,
+    fontWeight: 800,
   },
-  diagLine: { fontSize: 12, opacity: 0.85 },
-  diagHint: { marginTop: 6, fontSize: 11, opacity: 0.6 },
 
-  listHeader: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 10,
-  },
-  cardTitle: { fontWeight: 950, fontSize: 14 },
-  cardMeta: { fontSize: 12, opacity: 0.7, marginTop: 3 },
-  cardMetaRight: { display: "flex", alignItems: "center", gap: 10 },
+  headerControlsRow: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 14 },
+  searchInput: { flex: "1 1 320px", minWidth: 220 },
+  select: { width: 180, minWidth: 160 },
 
-  searchRow: { display: "flex", gap: 8, marginBottom: 10, alignItems: "center" },
-
-  emptyBox: {
-    border: "1px dashed var(--hdud-border)",
+  diagBox: {
+    marginTop: 12,
+    padding: 12,
     borderRadius: 12,
-    padding: 14,
-    opacity: 0.95,
-    fontSize: 13,
-    lineHeight: 1.35,
+    border: "1px solid var(--hdud-border)",
     background: "rgba(255,255,255,0.02)",
   },
-  emptyTitle: { fontWeight: 950, marginBottom: 6, fontSize: 13 },
-  emptyText: { opacity: 0.85 },
+  diagLine: { fontSize: 12, opacity: 0.78, marginTop: 6 },
 
-  listWrap: { display: "flex", flexDirection: "column", gap: 10 },
-
-  itemBtn: {
+  historyHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingBottom: 12,
+    borderBottom: "1px solid var(--hdud-border)",
+    marginBottom: 12,
+  },
+  historyTitle: { fontWeight: 950, fontSize: 14 },
+  historyRight: { display: "flex", alignItems: "center", gap: 10 },
+  historyPill: {
     border: "1px solid var(--hdud-border)",
     background: "var(--hdud-surface-2)",
-    color: "var(--hdud-text)",
+    padding: "4px 10px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 800,
+    opacity: 0.9,
+    whiteSpace: "nowrap",
+  },
+
+  historyBodyGrid: { display: "grid", gridTemplateColumns: "360px 1fr", gap: 18, alignItems: "start" },
+  leftCol: {},
+  rightCol: {},
+
+  leftList: { display: "flex", flexDirection: "column", gap: 10 },
+  itemCard: {
+    border: "1px solid var(--hdud-border)",
     borderRadius: 12,
     padding: 12,
     cursor: "pointer",
-    textAlign: "left",
-    transition: "transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease",
+    userSelect: "none",
   },
-  itemBtnActive: { outline: "2px solid var(--hdud-accent-border)" },
+  itemTopRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 },
+  itemTitle: { fontWeight: 950, fontSize: 13, letterSpacing: -0.2 },
+  itemDesc: { marginTop: 8, fontSize: 12, opacity: 0.78, lineHeight: 1.35 },
+  itemMeta: { marginTop: 10, fontSize: 11, opacity: 0.7, display: "flex", gap: 8, alignItems: "center" },
+  itemActions: { marginTop: 10, display: "flex", justifyContent: "flex-end" },
 
-  itemTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  itemTitle: { fontSize: 13, fontWeight: 950, display: "flex", alignItems: "center", gap: 8 },
-  itemId: { fontSize: 11, opacity: 0.65, fontWeight: 900 },
-  itemDesc: { marginTop: 6, fontSize: 12, opacity: 0.78, lineHeight: 1.3 },
-  itemMeta: { marginTop: 8, fontSize: 11, opacity: 0.65 },
-
-  badge: {
-    fontSize: 11,
-    fontWeight: 950,
-    padding: "4px 8px",
-    borderRadius: 999,
+  statusPill: {
     border: "1px solid var(--hdud-border)",
-    color: "var(--hdud-text)",
+    background: "var(--hdud-surface-2)",
+    padding: "4px 10px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 900,
+    opacity: 0.9,
     whiteSpace: "nowrap",
   },
-  badgeDraft: { background: "rgba(255,180,0,0.15)" },
-  badgePublic: { background: "rgba(0,200,120,0.15)" },
 
-  badgeSoft: {
-    fontSize: 11,
-    fontWeight: 950,
-    padding: "4px 8px",
-    borderRadius: 999,
-    background: "var(--hdud-surface-2)",
-    border: "1px solid var(--hdud-border)",
-    color: "var(--hdud-text)",
+  emptyList: {
+    border: "1px dashed var(--hdud-border)",
+    borderRadius: 12,
+    padding: 14,
+    background: "rgba(255,255,255,0.02)",
   },
-
-  editorHeader: {
-    display: "grid",
-    gridTemplateColumns: "1fr auto",
-    gap: 10,
-    alignItems: "start",
-    marginBottom: 12,
-  },
-  editorBadges: { display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" },
-  editorActions: { display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" },
 
   rightEmpty: {
     border: "1px dashed var(--hdud-border)",
     borderRadius: 12,
-    padding: 18,
-    opacity: 0.95,
+    padding: 16,
     background: "rgba(255,255,255,0.02)",
   },
-  rightEmptyTitle: { fontWeight: 950, marginBottom: 6, fontSize: 13 },
-  rightEmptyText: { fontSize: 12, opacity: 0.78, lineHeight: 1.35 },
+  rightEmptyKicker: { fontSize: 11, letterSpacing: 0.6, textTransform: "uppercase", opacity: 0.7, fontWeight: 900 },
+  rightEmptyTitle: { fontSize: 18, fontWeight: 950, marginTop: 6 },
+  rightEmptyText: { marginTop: 10, fontSize: 12, opacity: 0.78, lineHeight: 1.45, maxWidth: 680 },
+  rightEmptyDivider: { marginTop: 14, marginBottom: 14, height: 1, background: "var(--hdud-border)", opacity: 0.7 },
+  rightEmptySectionTitle: { fontSize: 12, fontWeight: 950, opacity: 0.9 },
+  rightEmptyHint: { marginTop: 10, fontSize: 12, opacity: 0.75 },
 
-  form: { marginTop: 10, display: "flex", flexDirection: "column", gap: 12 },
-  label: { display: "flex", flexDirection: "column", gap: 6 },
-  labelTop: { fontSize: 12, fontWeight: 950, opacity: 0.85 },
-  counter: { fontSize: 11, opacity: 0.65 },
+  quickRow: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 },
+  quickList: { marginTop: 8, marginBottom: 0, paddingLeft: 18, fontSize: 12, opacity: 0.78, lineHeight: 1.5 },
 
-  noteMuted: { fontSize: 11, opacity: 0.62, marginTop: 2 },
+  form: { border: "1px solid var(--hdud-border)", borderRadius: 12, padding: 14, background: "rgba(255,255,255,0.02)" },
+  formHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" },
+  formTitle: { fontWeight: 950, fontSize: 14 },
+  formMeta: { fontSize: 12, opacity: 0.75, marginTop: 4 },
+  formBadges: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" },
+  badge: {
+    border: "1px solid var(--hdud-border)",
+    background: "var(--hdud-surface-2)",
+    padding: "4px 10px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 900,
+    opacity: 0.9,
+  },
+  formActions: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12, marginBottom: 10 },
 
-  suggestTitle: { fontSize: 13, fontWeight: 950, marginBottom: 8 },
-  suggestList: { margin: 0, paddingLeft: 18, fontSize: 12, opacity: 0.85, lineHeight: 1.35 },
-  suggestHint: { marginTop: 8, fontSize: 11, opacity: 0.62 },
+  label: { display: "block", marginTop: 10 },
+  labelTop: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, fontWeight: 900, opacity: 0.9, marginBottom: 6 },
+  counter: { display: "block", fontSize: 11, opacity: 0.7, marginTop: 6 },
+
+  suggestHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" },
+  suggestTitle: { fontWeight: 950, fontSize: 13, opacity: 0.95 },
+  suggestList: { marginTop: 10, marginBottom: 0, paddingLeft: 18, fontSize: 12, opacity: 0.78, lineHeight: 1.6 },
+  suggestHint: { marginTop: 8, fontSize: 11, opacity: 0.6 },
+  suggestCollapsed: { marginTop: 10, fontSize: 12, opacity: 0.75 },
 };

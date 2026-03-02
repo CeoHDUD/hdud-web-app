@@ -1,114 +1,27 @@
 // C:\HDUD_DATA\hdud-web-app\src\components\Sidebar.tsx
+import React, { useEffect } from "react";
 
-import React from "react";
-import { NavLink } from "react-router-dom";
-
-const linkStyle: React.CSSProperties = {
-  display: "block",
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid transparent",
-};
-
+/**
+ * DEPRECATED (LEGADO)
+ * ------------------
+ * A Sidebar oficial é a coluna de ícones dentro do AppShell vNext (src/layouts/AppShell.tsx).
+ * Este arquivo existe apenas para compatibilidade temporária caso algum import antigo ainda exista.
+ *
+ * Se você estiver vendo este warning, procure e remova o import legado.
+ */
 export default function Sidebar() {
-  return (
-    <aside
-      style={{
-        borderRight: "1px solid var(--border)",
-        background: "var(--surface-2)",
-        padding: 14,
-        position: "sticky",
-        top: 0,
-        height: "100vh",
-      }}
-    >
-      <div style={{ padding: "6px 8px 14px 8px" }}>
-        <div style={{ fontWeight: 750, letterSpacing: "-0.02em" }}>HDUD</div>
-        <div style={{ color: "var(--muted)", fontSize: 12 }}>
-          Plataforma de Memórias
-        </div>
-      </div>
+  useEffect(() => {
+    // DEV-only (evita poluir prod)
+    if ((import.meta as any).env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[HDUD][LEGACY] components/Sidebar.tsx foi renderizado. " +
+          "A navegação oficial é a do AppShell vNext (src/layouts/AppShell.tsx). " +
+          "Remova o import/uso legado para eliminar duplicação."
+      );
+    }
+  }, []);
 
-      <nav style={{ display: "grid", gap: 8 }}>
-        <NavLink
-          to="/dashboard"
-          style={({ isActive }) => ({
-            ...linkStyle,
-            background: isActive ? "var(--surface)" : "transparent",
-            borderColor: isActive ? "var(--border)" : "transparent",
-          })}
-        >
-          Início
-        </NavLink>
-
-        <NavLink
-          to="/feed"
-          style={({ isActive }) => ({
-            ...linkStyle,
-            background: isActive ? "var(--surface)" : "transparent",
-            borderColor: isActive ? "var(--border)" : "transparent",
-          })}
-        >
-          Feed
-        </NavLink>
-
-        <NavLink
-          to="/chapters"
-          style={({ isActive }) => ({
-            ...linkStyle,
-            background: isActive ? "var(--surface)" : "transparent",
-            borderColor: isActive ? "var(--border)" : "transparent",
-          })}
-        >
-          Capítulos
-        </NavLink>
-
-        <NavLink
-          to="/memories"
-          style={({ isActive }) => ({
-            ...linkStyle,
-            background: isActive ? "var(--surface)" : "transparent",
-            borderColor: isActive ? "var(--border)" : "transparent",
-          })}
-        >
-          Memórias
-        </NavLink>
-
-        <NavLink
-          to="/timeline"
-          style={({ isActive }) => ({
-            ...linkStyle,
-            background: isActive ? "var(--surface)" : "transparent",
-            borderColor: isActive ? "var(--border)" : "transparent",
-          })}
-        >
-          Timeline
-        </NavLink>
-
-        <div style={{ height: 10 }} />
-
-        <NavLink
-          to="/profile"
-          style={({ isActive }) => ({
-            ...linkStyle,
-            background: isActive ? "var(--surface)" : "transparent",
-            borderColor: isActive ? "var(--border)" : "transparent",
-          })}
-        >
-          Perfil
-        </NavLink>
-
-        <NavLink
-          to="/settings"
-          style={({ isActive }) => ({
-            ...linkStyle,
-            background: isActive ? "var(--surface)" : "transparent",
-            borderColor: isActive ? "var(--border)" : "transparent",
-          })}
-        >
-          Configurações
-        </NavLink>
-      </nav>
-    </aside>
-  );
+  // ✅ No-op: evita sidebar paralela ativa
+  return null;
 }

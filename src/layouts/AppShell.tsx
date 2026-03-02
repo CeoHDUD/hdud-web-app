@@ -1,18 +1,14 @@
-// C:\HDUD_DATA\hdud-web-app\src\layouts\AppShell.tsx
+/* C:\HDUD_DATA\hdud-web-app\src\layouts\AppShell.tsx */
 
 import { Outlet, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 
-type Props = {
-  onLogout: () => void;
-};
+type Props = { onLogout: () => void };
 
-// Flag DEV-only (não existe em prod se não definida)
 const DEBUG_AUTH = (import.meta as any).env?.VITE_DEBUG_AUTH === "1";
 
 type AuthDebugStatus = "ok" | "refreshed" | "fail";
 
-// Dirty Guard (app-level) via event
 type DirtyState = {
   dirty: boolean;
   message?: string;
@@ -22,430 +18,637 @@ type DirtyState = {
 type MiniProfileState = {
   initials: string;
   avatar_url: string | null;
+  name: string;
+  bio: string;
+  headline: string;
 };
 
-function computeInitialsFromName(name?: string | null): string {
-  const raw = String(name || "").trim();
-  if (!raw) return "AN";
-
-  const parts = raw
-    .split(/\s+/g)
-    .map((p) => p.trim())
-    .filter(Boolean);
-
-  if (parts.length === 0) return "AN";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-
-  const first = parts[0].slice(0, 1);
-  const last = parts[parts.length - 1].slice(0, 1);
-  const out = `${first}${last}`.toUpperCase();
-  return out || "AN";
+function safeJsonParse(v: string | null) {
+  if (!v) return null;
+  try {
+    return JSON.parse(v);
+  } catch {
+    return null;
+  }
 }
 
-function getInitialsFallback(): string {
-  // MVP: iniciais fixas, estilo LinkedIn.
-  // Próximo passo: puxar /me/profile e derivar das iniciais do name_public.
-  return "AN";
+function safeInitials(name?: string | null) {
+  const s = String(name ?? "").trim();
+  if (!s) return "AN";
+  const parts = s.split(/\s+/g).filter(Boolean);
+  const a = (parts[0]?.[0] ?? "A").toUpperCase();
+  const b = (parts[1]?.[0] ?? parts[0]?.[1] ?? "N").toUpperCase();
+  return `${a}${b}`.slice(0, 2);
+}
+
+function toAbsUrl(s: string | null) {
+  if (!s) return null;
+  try {
+    // já absoluta?
+    if (/^https?:\/\//i.test(s)) {
+      // normaliza localhost (evita mismatch com VITE_API_BASE_URL=127.0.0.1)
+      return s
+        .replace("http://localhost", "http://127.0.0.1")
+        .replace("https://localhost", "https://127.0.0.1");
+    }
+
+    const API_BASE_URL =
+      (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:4000";
+
+    if (s.startsWith("/")) return `${API_BASE_URL}${s}`;
+    return s;
+  } catch {
+    return s;
+  }
+}
+
+// ============================
+// Ícones (SVG inline minimal)
+// ============================
+type IconName =
+  | "home"
+  | "feed"
+  | "chapters"
+  | "memories"
+  | "timeline"
+  | "profile"
+  | "settings";
+
+function Icon({ name }: { name: IconName }) {
+  const common = {
+    width: 20,
+    height: 20,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    "aria-hidden": true,
+  } as const;
+
+  switch (name) {
+    case "home":
+      return (
+        <svg {...common}>
+          <path
+            d="M4 10.6 12 4l8 6.6V20a1.8 1.8 0 0 1-1.8 1.8H5.8A1.8 1.8 0 0 1 4 20v-9.4Z"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M9.2 21.8V14a1.2 1.2 0 0 1 1.2-1.2h3.2A1.2 1.2 0 0 1 14.8 14v7.8"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case "feed":
+      return (
+        <svg {...common}>
+          <path
+            d="M5 6h14M5 12h14M5 18h10"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "chapters":
+      return (
+        <svg {...common}>
+          <path
+            d="M6 4h10a2 2 0 0 1 2 2v14H8a2 2 0 0 0-2 2V4Z"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M8 8h8M8 12h8M8 16h6"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "memories":
+      return (
+        <svg {...common}>
+          <path
+            d="M7 21h10a2 2 0 0 0 2-2V8l-5-5H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2Z"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M14 3v5h5"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M8 13h8M8 17h6"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "timeline":
+      return (
+        <svg {...common}>
+          <path
+            d="M6 6h6M6 12h10M6 18h14"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+          />
+          <path
+            d="M4 6h.01M4 12h.01M4 18h.01"
+            stroke="currentColor"
+            strokeWidth="4"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "profile":
+      return (
+        <svg {...common}>
+          <path
+            d="M20 21a8 8 0 0 0-16 0"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+          />
+          <path
+            d="M12 13a4.2 4.2 0 1 0 0-8.4A4.2 4.2 0 0 0 12 13Z"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case "settings":
+      return (
+        <svg {...common}>
+          <path
+            d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+            stroke="currentColor"
+            strokeWidth="2.2"
+          />
+          <path
+            d="M19.4 15a8.6 8.6 0 0 0 .06-1 8.6 8.6 0 0 0-.06-1l2.06-1.6-2-3.46-2.5 1a8.7 8.7 0 0 0-1.72-1l-.38-2.68H9.1l-.38 2.68a8.7 8.7 0 0 0-1.72 1l-2.5-1-2 3.46L4.6 13a8.6 8.6 0 0 0-.06 1 8.6 8.6 0 0 0 .06 1l-2.06 1.6 2 3.46 2.5-1a8.7 8.7 0 0 0 1.72 1l.38 2.68h5.8l.38-2.68a8.7 8.7 0 0 0 1.72-1l2.5 1 2-3.46L19.4 15Z"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    default:
+      return null;
+  }
 }
 
 export default function AppShell({ onLogout }: Props) {
-  const location = useLocation();
-  const navigate = useNavigate();
+  const loc = useLocation();
+  const nav = useNavigate();
 
-  // Estado DEV-only para observabilidade visual
-  const [authStatus, setAuthStatus] = useState<AuthDebugStatus>("ok");
+  const [dirty, setDirty] = useState<DirtyState>({ dirty: false });
 
-  // Dirty guard central (sidebar/logout)
-  const [dirtyState, setDirtyState] = useState<DirtyState>({
-    dirty: false,
-    message: "Você tem alterações não salvas. Deseja sair sem salvar?",
-    source: "",
+  const [miniProfile, setMiniProfile] = useState<MiniProfileState>({
+    initials: "AN",
+    avatar_url: null,
+    name: "Alexandre Neves",
+    bio: "DBA Senior | HDUD",
+    headline: "Founder | CEO HDUD",
   });
 
-  const isDirty = !!dirtyState.dirty;
-
-  const confirmLeave = (customMsg?: string) => {
-    const msg =
-      customMsg ||
-      dirtyState.message ||
-      "Você tem alterações não salvas. Deseja sair sem salvar?";
-    return window.confirm(msg);
-  };
-
-  // Mini perfil (avatar + iniciais) — puxado do /me/profile (sem depender de outras páginas)
-  const [miniProfile, setMiniProfile] = useState<MiniProfileState>(() => ({
-    initials: getInitialsFallback(),
-    avatar_url: null,
-  }));
-
-  // Escuta eventos de dirty disparados por páginas (ex.: ProfilePage)
+  // hidrata do storage (quando existir)
   useEffect(() => {
-    function onDirty(e: Event) {
-      const ce = e as CustomEvent<DirtyState>;
-      const next = ce?.detail || { dirty: false };
+    const raw = safeJsonParse(localStorage.getItem("HDUD_PROFILE"));
+    if (raw) {
+      const name = String(raw?.name ?? "Alexandre Neves");
+      const bio = String(raw?.bio ?? "DBA Senior | HDUD");
+      const headline = String(raw?.headline ?? "Founder | CEO HDUD");
+      const avatar_url = toAbsUrl(raw?.avatar_url ?? null);
 
-      setDirtyState((prev) => ({
-        dirty: !!next.dirty,
-        message:
-          next.message ||
-          prev.message ||
-          "Você tem alterações não salvas. Deseja sair sem salvar?",
-        source: next.source || prev.source || "",
-      }));
+      setMiniProfile({
+        initials: safeInitials(name),
+        avatar_url,
+        name,
+        bio,
+        headline,
+      });
     }
 
-    window.addEventListener("hdud:dirty", onDirty as any);
-    return () => window.removeEventListener("hdud:dirty", onDirty as any);
+    const dirtyRaw = safeJsonParse(localStorage.getItem("HDUD_DIRTY"));
+    if (dirtyRaw) {
+      setDirty({
+        dirty: !!dirtyRaw?.dirty,
+        message: dirtyRaw?.message,
+        source: dirtyRaw?.source,
+      });
+    }
   }, []);
 
-  // DEV auth badge events
+  // escuta updates de outras abas
   useEffect(() => {
-    if (!DEBUG_AUTH) return;
+    const onStorage = (e: StorageEvent) => {
+      // perfil
+      if (e.key === "HDUD_PROFILE") {
+        const raw = safeJsonParse(e.newValue);
+        const name = String(raw?.name ?? "Alexandre Neves");
+        const bio = String(raw?.bio ?? "DBA Senior | HDUD");
+        const headline = String(raw?.headline ?? "Founder | CEO HDUD");
+        const avatar_url = toAbsUrl(raw?.avatar_url ?? null);
 
-    function onAuthRefreshed() {
-      setAuthStatus("refreshed");
-      setTimeout(() => setAuthStatus("ok"), 2000);
-    }
-
-    function onAuthFail() {
-      setAuthStatus("fail");
-    }
-
-    window.addEventListener("hdud:auth-refreshed", onAuthRefreshed);
-    window.addEventListener("hdud:auth-fail", onAuthFail);
-
-    return () => {
-      window.removeEventListener("hdud:auth-refreshed", onAuthRefreshed);
-      window.removeEventListener("hdud:auth-fail", onAuthFail);
-    };
-  }, []);
-
-  // 🔥 Puxa /me/profile quando:
-  // - AppShell monta
-  // - houve refresh de token (evento)
-  // - usuário voltou pro app (tab focus)
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadMeProfile() {
-      try {
-        const token = localStorage.getItem("access_token");
-        if (!token) {
-          if (!cancelled) {
-            setMiniProfile({
-              initials: getInitialsFallback(),
-              avatar_url: null,
-            });
-          }
-          return;
-        }
-
-        const API_BASE =
-          (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:4000";
-
-        const res = await fetch(`${API_BASE}/me/profile`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+        setMiniProfile({
+          initials: safeInitials(name),
+          avatar_url,
+          name,
+          bio,
+          headline,
         });
-
-        if (!res.ok) {
-          // sem quebrar UX: mantém fallback
-          if (!cancelled) {
-            setMiniProfile({
-              initials: getInitialsFallback(),
-              avatar_url: null,
-            });
-          }
-          return;
-        }
-
-        const data = await res.json();
-
-        const namePublic =
-          (data?.name_public && String(data.name_public).trim()) ||
-          (data?.profile?.name_public && String(data.profile.name_public).trim()) ||
-          null;
-
-        const avatarUrl =
-          (data?.avatar_url && String(data.avatar_url).trim()) ||
-          (data?.profile?.avatar_url && String(data.profile.avatar_url).trim()) ||
-          null;
-
-        const initialsFromName = computeInitialsFromName(namePublic);
-
-        if (!cancelled) {
-          setMiniProfile({
-            initials: initialsFromName || getInitialsFallback(),
-            avatar_url: avatarUrl || null,
-          });
-        }
-      } catch {
-        if (!cancelled) {
-          setMiniProfile({
-            initials: getInitialsFallback(),
-            avatar_url: null,
-          });
-        }
       }
-    }
 
-    loadMeProfile();
-
-    function onAuthRefreshed() {
-      loadMeProfile();
-    }
-
-    function onFocus() {
-      loadMeProfile();
-    }
-
-    window.addEventListener("hdud:auth-refreshed", onAuthRefreshed);
-    window.addEventListener("focus", onFocus);
-
-    return () => {
-      cancelled = true;
-      window.removeEventListener("hdud:auth-refreshed", onAuthRefreshed);
-      window.removeEventListener("focus", onFocus);
+      // dirty state (se alguma página quiser marcar)
+      if (e.key === "HDUD_DIRTY") {
+        const raw = safeJsonParse(e.newValue);
+        setDirty({
+          dirty: !!raw?.dirty,
+          message: raw?.message,
+          source: raw?.source,
+        });
+      }
     };
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  // Topbar title
-  const topTitle = useMemo(() => {
-    if (location.pathname.startsWith("/memories")) return "Memórias";
-    if (location.pathname.startsWith("/chapters")) return "Capítulos";
-    if (location.pathname.startsWith("/timeline")) return "Timeline";
-    if (location.pathname.startsWith("/feed")) return "Feed";
-    if (location.pathname.startsWith("/profile")) return "Perfil";
-    if (location.pathname.startsWith("/settings")) return "Configurações";
-    if (location.pathname.startsWith("/dashboard")) return "Início";
-    return "HDUD";
-  }, [location.pathname]);
+  // proteção simples ao navegar enquanto dirty
+  function confirmIfDirty(nextPath?: string) {
+    if (!dirty.dirty) return true;
 
-  function handleNavClick(e: any, to: string) {
-    if (to === location.pathname) return;
+    const msg =
+      dirty.message ||
+      "Você tem alterações não salvas. Se sair agora, pode perder o que digitou.";
+    const extra = nextPath ? `\n\nIr para: ${nextPath}` : "";
+    return window.confirm(`${msg}${extra}\n\nContinuar mesmo assim?`);
+  }
 
-    if (isDirty) {
-      e.preventDefault();
-      const ok = confirmLeave(
-        "Você tem alterações não salvas. Deseja navegar e perder essas alterações?"
-      );
-      if (!ok) return;
-
-      navigate(to);
-      return;
-    }
+  function guardedNavigate(path: string) {
+    if (!confirmIfDirty(path)) return;
+    nav(path);
   }
 
   function handleLogout() {
-    if (isDirty) {
-      const ok = confirmLeave(
-        "Você tem alterações não salvas. Deseja sair mesmo assim?"
-      );
-      if (!ok) return;
-    }
+    if (!confirmIfDirty("Sair")) return;
     onLogout();
   }
 
-  function goProfile() {
-    if (location.pathname.startsWith("/profile")) return;
+  // título simples para o header
+  const topTitle = useMemo(() => {
+    const p = loc.pathname || "";
+    if (p.startsWith("/dashboard")) return "Início";
+    if (p.startsWith("/feed")) return "Feed";
+    if (p.startsWith("/chapters")) return "Capítulos";
+    if (p.startsWith("/memories")) return "Memórias";
+    if (p.startsWith("/timeline")) return "Timeline";
+    if (p.startsWith("/profile")) return "Perfil";
+    if (p.startsWith("/settings")) return "Configurações";
+    return "HDUD";
+  }, [loc.pathname]);
 
-    if (isDirty) {
-      const ok = confirmLeave(
-        "Você tem alterações não salvas. Deseja ir ao Perfil e perder essas alterações?"
-      );
-      if (!ok) return;
-    }
+  const navItems = useMemo(
+    () => [
+      { to: "/dashboard", label: "Início", icon: "home" as const },
+      { to: "/feed", label: "Feed", icon: "feed" as const },
+      { to: "/chapters", label: "Capítulos", icon: "chapters" as const },
+      { to: "/memories", label: "Memórias", icon: "memories" as const },
+      { to: "/timeline", label: "Timeline", icon: "timeline" as const },
+      { to: "/profile", label: "Perfil", icon: "profile" as const },
+    ],
+    []
+  );
 
-    navigate("/profile");
-  }
-
-  const initials = miniProfile.initials;
+  // debug auth (optional)
+  const [authDebug, setAuthDebug] = useState<AuthDebugStatus>("ok");
+  useEffect(() => {
+    if (!DEBUG_AUTH) return;
+    const t = setInterval(() => {
+      const raw = localStorage.getItem("HDUD_TOKEN") || "";
+      setAuthDebug(raw ? "ok" : "fail");
+    }, 1500);
+    return () => clearInterval(t);
+  }, []);
 
   return (
     <div
       style={{
-        display: "flex",
+        display: "grid",
+        gridTemplateColumns: "56px 300px 1fr",
         minHeight: "100vh",
         background: "var(--hdud-bg)",
-        color: "var(--hdud-text)",
       }}
     >
-      {/* Sidebar */}
+      {/* COLUNA ÍCONES (nav) */}
       <aside
         style={{
-          width: 260,
-          background: "var(--hdud-surface)",
           borderRight: "1px solid var(--hdud-border)",
-          padding: 16,
+          background: "var(--hdud-surface)",
+          position: "sticky",
+          top: 0,
+          alignSelf: "stretch",
+          display: "flex",
+          flexDirection: "column",
+		  justifyContent: "space-between",
+          alignItems: "center",
+          padding: "10px 0",
+          gap: 8,
         }}
       >
-        <div style={{ fontWeight: 900, marginBottom: 16 }}>HDUD</div>
-
-        <nav style={{ display: "grid", gap: 6 }}>
-          {[
-            ["/dashboard", "Início"],
-            ["/feed", "Feed"],
-            ["/chapters", "Capítulos"],
-            ["/memories", "Memórias"],
-            ["/timeline", "Timeline"],
-            ["/profile", "Perfil"],
-            ["/settings", "Configurações"],
-          ].map(([to, label]) => (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            width: "100%",
+            alignItems: "center",
+            height: "100%",
+          }}
+        >
+          {navItems.map((it) => (
             <NavLink
-              key={to}
-              to={to}
-              onClick={(e) => handleNavClick(e, to)}
+              key={it.to}
+              to={it.to}
+              onClick={(e) => {
+                if (!confirmIfDirty(it.to)) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }
+              }}
+              title={it.label}
+              aria-label={it.label}
               style={({ isActive }) => ({
-                padding: "10px 12px",
+                height: 40,
+                width: 40,
                 borderRadius: 10,
-                fontWeight: 700,
-                color: "var(--hdud-text)",
-                background: isActive ? "var(--hdud-accent-bg)" : "transparent",
                 border: isActive
                   ? "1px solid var(--hdud-accent-border)"
                   : "1px solid transparent",
+                background: isActive ? "var(--hdud-accent-bg)" : "transparent",
+                display: "grid",
+                placeItems: "center",
+                color: "var(--hdud-text)",
               })}
-              title={isDirty ? "Há alterações não salvas" : undefined}
             >
-              {label}
+              {() => (
+                <span
+                  aria-hidden
+                  style={{
+                    width: 22,
+                    height: 22,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Icon name={it.icon} />
+                </span>
+              )}
             </NavLink>
           ))}
-        </nav>
 
-        {isDirty ? (
-          <div style={{ marginTop: 12, opacity: 0.75, fontSize: 12 }}>
-            Você tem alterações não salvas.
-          </div>
-        ) : null}
-      </aside>
+          {/* Spacer: fixa Configurações + Sair colados no rodapé */}
 
-      {/* Main */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-        {/* Topbar */}
-        <header
-          style={{
-            height: 56,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "0 16px",
-            borderBottom: "1px solid var(--hdud-border)",
-            background: "var(--hdud-surface)",
-          }}
-        >
-          <div style={{ fontWeight: 800, display: "flex", gap: 12 }}>
-            <span>
-              {topTitle}{" "}
-              <span style={{ fontWeight: 500, opacity: 0.7 }}>
-                AppShell mínimo (vNext)
-              </span>
-            </span>
 
-            {/* Badge DEV-only */}
-            {DEBUG_AUTH && (
-              <span
-                style={{
-                  padding: "4px 8px",
-                  borderRadius: 999,
-                  fontSize: 12,
-                  fontWeight: 800,
-                  alignSelf: "center",
-                  background:
-                    authStatus === "ok"
-                      ? "#1f7a1f"
-                      : authStatus === "refreshed"
-                      ? "#1f4fd8"
-                      : "#b91c1c",
-                  color: "#fff",
-                }}
-              >
-                Auth: {authStatus}
-              </span>
-            )}
-          </div>
-
-          {/* Right side: mini-perfil + sair (LinkedIn-like) */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              width: "100%",
+              alignItems: "center",
+              paddingBottom: 6,
+            }}
+          >
+            {/* Configurações */}
             <button
-              onClick={goProfile}
+              onClick={() => guardedNavigate("/settings")}
+              title="Configurações"
+              aria-label="Configurações"
               style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: 2,
-                border: "1px solid transparent",
-                background: "transparent",
+                height: 40,
+                width: 40,
+                borderRadius: 10,
+                border: loc.pathname.startsWith("/settings")
+                  ? "1px solid var(--hdud-accent-border)"
+                  : "1px solid transparent",
+                background: loc.pathname.startsWith("/settings")
+                  ? "var(--hdud-accent-bg)"
+                  : "transparent",
+                display: "grid",
+                placeItems: "center",
                 color: "var(--hdud-text)",
                 cursor: "pointer",
-                padding: "6px 8px",
-                borderRadius: 10,
               }}
-              title={isDirty ? "Há alterações não salvas" : "Abrir perfil"}
+              onMouseEnter={(e) => {
+                if (loc.pathname.startsWith("/settings")) return;
+                e.currentTarget.style.background = "rgba(255,255,255,0.03)";
+                e.currentTarget.style.borderColor = "var(--hdud-border)";
+              }}
+              onMouseLeave={(e) => {
+                if (loc.pathname.startsWith("/settings")) return;
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.borderColor = "transparent";
+              }}
             >
-              <div
+              <span
+                aria-hidden
                 style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: 999,
-                  display: "flex",
+                  width: 22,
+                  height: 22,
+                  display: "inline-flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontWeight: 900,
-                  fontSize: 12,
-                  border: "1px solid var(--hdud-border)",
-                  background: "rgba(255,255,255,0.04)",
-                  userSelect: "none",
-                  lineHeight: 1,
-                  overflow: "hidden",
                 }}
               >
-                {miniProfile.avatar_url ? (
-                  <img
-                    src={miniProfile.avatar_url}
-                    alt="avatar"
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
-                      display: "block",
-                    }}
-                    onError={() =>
-                      setMiniProfile((prev) => ({ ...prev, avatar_url: null }))
-                    }
-                  />
-                ) : (
-                  initials
-                )}
-              </div>
-              <div style={{ fontSize: 11, fontWeight: 800, opacity: 0.9 }}>
-                {initials}
-              </div>
+                <Icon name={"settings"} />
+              </span>
             </button>
 
+            {/* Sair — abaixo e colado em Configurações */}
             <button
               onClick={handleLogout}
+              title="Sair"
+              aria-label="Sair"
               style={{
-                padding: "8px 12px",
+                height: 40,
+                width: 40,
                 borderRadius: 10,
-                border: "1px solid var(--hdud-border)",
-                background: "var(--hdud-surface)",
+                border: "1px solid transparent",
+                background: "transparent",
+                display: "grid",
+                placeItems: "center",
                 color: "var(--hdud-text)",
-                fontWeight: 800,
                 cursor: "pointer",
               }}
-              title={isDirty ? "Há alterações não salvas" : "Sair"}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(255,255,255,0.03)";
+                e.currentTarget.style.borderColor = "var(--hdud-border)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.borderColor = "transparent";
+              }}
             >
-              Sair
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path
+                  d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M16 17l5-5-5-5M21 12H9"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                />
+              </svg>
             </button>
           </div>
-        </header>
+        </div>
+      </aside>
 
-        {/* Content */}
-        <main style={{ flex: 1, background: "var(--hdud-bg)" }}>
+      {/* COLUNA PERFIL (bio) */}
+      <aside
+        style={{
+          borderRight: "1px solid var(--hdud-border)",
+          background: "var(--hdud-bg)",
+          padding: 14,
+          position: "sticky",
+          top: 0,
+          alignSelf: "stretch",
+        }}
+      >
+        <div
+          style={{
+            background: "var(--hdud-surface)",
+            border: "1px solid var(--hdud-border)",
+            borderRadius: 18,
+            padding: 14,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.18)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: 16,
+                border: "1px solid var(--hdud-border)",
+                background: "rgba(255,255,255,0.04)",
+                overflow: "hidden",
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
+              {miniProfile.avatar_url ? (
+                <img
+                  src={miniProfile.avatar_url || ""}
+                  alt={miniProfile.name}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    display: "block",
+                  }}
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).style.display = "none";
+                  }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    display: "grid",
+                    placeItems: "center",
+                    fontWeight: 800,
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  {miniProfile.initials}
+                </div>
+              )}
+            </div>
+
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 800, lineHeight: 1.1, fontSize: 16 }}>
+                {miniProfile.name}
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--hdud-muted)",
+                  marginTop: 2,
+                }}
+              >
+                {miniProfile.bio}
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--hdud-muted)",
+                  marginTop: 2,
+                }}
+              >
+                {miniProfile.headline}
+              </div>
+            </div>
+          </div>
+
+          {/* ✅ CTA removido: Perfil já existe na navegação */}
+          {DEBUG_AUTH && (
+            <div style={{ marginTop: 10, fontSize: 12, color: "var(--hdud-muted)" }}>
+              auth: <b>{authDebug}</b>
+            </div>
+          )}
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <main style={{ minWidth: 0 }}>
+        {/* Topbar (sem ações globais) */}
+        <div
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 50,
+            background: "var(--hdud-bg)",
+            borderBottom: "1px solid var(--hdud-border)",
+          }}
+        >
+          <div
+            style={{
+              height: 52,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0 18px",
+            }}
+          >
+            <div style={{ fontWeight: 800 }}>{topTitle}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {/* intencionalmente vazio — ações contextuais ficam nas páginas */}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: 18 }}>
           <Outlet />
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
   );
 }

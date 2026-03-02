@@ -9,7 +9,7 @@ type MeProfile = {
   name_public: string | null;
   bio_short: string | null;
   location: string | null;
-  avatar_url: string | null;
+  avatar_url: string | null; // vindo do backend (somente leitura aqui)
 };
 
 function norm(v: string): string | null {
@@ -17,10 +17,34 @@ function norm(v: string): string | null {
   return s.length ? s : null;
 }
 
-function isProbablyHttpUrl(v: string): boolean {
+/**
+ * ✅ Resolve URL de avatar de forma CANÔNICA:
+ * - Se vier absoluta (http/https): mantém
+ * - Se vier "/cdn/...": aponta SEMPRE para API_BASE_URL (4000), nunca para 5173
+ * - Se vier outros "/...":
+ *    - se existir VITE_API_BASE_URL, também prefixa com API (DEV-safe)
+ *    - senão usa origin atual (prod/proxy)
+ */
+function toAbsoluteCdnUrl(v: string): string {
   const s = (v ?? "").trim();
-  if (!s) return true; // vazio é ok (null)
-  return /^https?:\/\/.+/i.test(s);
+  if (!s) return "";
+  if (/^https?:\/\/.+/i.test(s)) return s;
+
+  const API_BASE_URL =
+    (import.meta as any).env?.VITE_API_BASE_URL || "";
+
+  if (s.startsWith("/cdn/")) {
+    const base = API_BASE_URL || "http://127.0.0.1:4000";
+    return `${base}${s}`;
+  }
+
+  if (s.startsWith("/")) {
+    // DEV: preferir backend, se informado
+    if (API_BASE_URL && API_BASE_URL.trim()) return `${API_BASE_URL}${s}`;
+    return `${window.location.origin}${s}`;
+  }
+
+  return s;
 }
 
 type AvatarCheckState = "idle" | "checking" | "ok" | "fail";
@@ -37,9 +61,16 @@ export default function ProfilePage() {
   const [namePublic, setNamePublic] = useState("");
   const [bioShort, setBioShort] = useState("");
   const [location, setLocation] = useState("");
+
+  // avatar (somente leitura / gerenciado por upload)
   const [avatarUrl, setAvatarUrl] = useState("");
 
-  // avatar checks (sem card/foto redundante aqui)
+  // upload state
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  // avatar checks
   const [avatarCheck, setAvatarCheck] = useState<AvatarCheckState>("idle");
   const [avatarHint, setAvatarHint] = useState<string | null>(null);
 
@@ -68,12 +99,10 @@ export default function ProfilePage() {
     return (
       namePublic !== ini.namePublic ||
       bioShort !== ini.bioShort ||
-      location !== ini.location ||
-      avatarUrl !== ini.avatarUrl
+      location !== ini.location
+      // avatarUrl NÃO entra em dirty (é gerenciado pelo upload)
     );
-  }, [namePublic, bioShort, location, avatarUrl]);
-
-  const avatarUrlValid = useMemo(() => isProbablyHttpUrl(avatarUrl), [avatarUrl]);
+  }, [namePublic, bioShort, location]);
 
   // ✅ Dirty Guard (refresh/fechar aba)
   useEffect(() => {
@@ -110,22 +139,19 @@ export default function ProfilePage() {
 
   async function checkAvatar(url: string) {
     const seq = ++avatarCheckSeq.current;
-    const u = (url ?? "").trim();
+    const raw = (url ?? "").trim();
 
     if (!mountedRef.current) return;
 
     setAvatarHint(null);
 
-    if (!u) {
+    if (!raw) {
       setAvatarCheck("idle");
       return;
     }
 
-    if (!isProbablyHttpUrl(u)) {
-      setAvatarCheck("fail");
-      setAvatarHint("A URL precisa começar com http:// ou https://");
-      return;
-    }
+    // ✅ fix: /cdn/... aponta para API_BASE
+    const u = toAbsoluteCdnUrl(raw);
 
     setAvatarCheck("checking");
 
@@ -161,7 +187,7 @@ export default function ProfilePage() {
         if (seq !== avatarCheckSeq.current) return cleanup();
 
         setAvatarCheck("fail");
-        setAvatarHint("Não consegui carregar a imagem desse link.");
+        setAvatarHint("Não consegui carregar o avatar (talvez ainda não exista).");
         cleanup();
       };
 
@@ -197,11 +223,10 @@ export default function ProfilePage() {
         avatarUrl: av,
       };
 
-      // valida silenciosamente o avatar (sem mostrar foto aqui)
+      // valida silenciosamente o avatar
       setAvatarCheck("idle");
       setAvatarHint(null);
       if (av?.trim()) {
-        // não bloquear o load; dispara async "best effort"
         checkAvatar(av);
       }
     } catch (e: any) {
@@ -235,26 +260,18 @@ export default function ProfilePage() {
     setStatus(null);
 
     try {
-      // validação leve (MVP)
-      if (!avatarUrlValid) {
-        setError("O link do avatar precisa começar com http:// ou https:// (ou ficar vazio).");
-        return;
-      }
-
       const payload = {
         name_public: norm(namePublic),
         bio_short: norm(bioShort),
         location: norm(location),
-        avatar_url: norm(avatarUrl),
+        // ✅ avatar_url removido: agora é gerenciado via upload/backend
       };
 
       await apiPut("/me/profile", payload);
 
-      // Recarrega /me/profile para manter normalização/fallback exatos do backend
       const cancelled = { current: false };
       await load(cancelled);
 
-      // força AppShell a recarregar mini-perfil (avatar topo)
       window.dispatchEvent(new CustomEvent("hdud:profile-updated"));
 
       setStatus("Alterações salvas ✅");
@@ -270,6 +287,91 @@ export default function ProfilePage() {
     }
   }
 
+  // ✅ Token compat (igual ao padrão do app)
+  function getAnyToken(): string | null {
+    return (
+      localStorage.getItem("HDUD_TOKEN") ||
+      localStorage.getItem("hdud_access_token") ||
+      localStorage.getItem("access_token") ||
+      localStorage.getItem("token") ||
+      null
+    );
+  }
+
+  async function onUploadAvatar() {
+    setUploadError(null);
+    setStatus(null);
+
+    if (!selectedFile) {
+      setUploadError("Selecione um arquivo primeiro.");
+      return;
+    }
+
+    const token = getAnyToken();
+    if (!token) {
+      setUploadError("Não autenticado (token ausente). Faça login novamente.");
+      return;
+    }
+
+    const API_BASE =
+      (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:4000";
+
+    try {
+      setUploading(true);
+
+      const form = new FormData();
+      form.append("file", selectedFile);
+
+      const res = await fetch(`${API_BASE}/me/avatar`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: form,
+      });
+
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = text;
+      }
+
+      if (!res.ok) {
+        const msg = data?.error || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+
+      const newUrl = (data?.avatar_url && String(data.avatar_url).trim()) || "";
+      if (!newUrl) {
+        throw new Error("Upload OK, mas avatar_url não retornou.");
+      }
+
+      // Atualiza UI local imediatamente
+      setAvatarUrl(newUrl);
+      setAvatarCheck("idle");
+      setAvatarHint(null);
+      checkAvatar(newUrl);
+
+      window.dispatchEvent(new CustomEvent("hdud:profile-updated"));
+
+      // Recarrega /me/profile para manter consistência do backend
+      const cancelled = { current: false };
+      await load(cancelled);
+
+      setStatus("Avatar enviado ✅");
+      setTimeout(() => setStatus(null), 1800);
+
+      // ✅ UX: limpa seleção do arquivo após sucesso
+      setSelectedFile(null);
+    } catch (e: any) {
+      setUploadError(e?.message || "Falha no upload do avatar.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   function onReset() {
     const ini = initialRef.current;
     if (!ini) return;
@@ -277,14 +379,11 @@ export default function ProfilePage() {
     setNamePublic(ini.namePublic);
     setBioShort(ini.bioShort);
     setLocation(ini.location);
-    setAvatarUrl(ini.avatarUrl);
-
-    setAvatarCheck("idle");
-    setAvatarHint(null);
-    if (ini.avatarUrl?.trim()) checkAvatar(ini.avatarUrl);
 
     setError(null);
     setStatus(null);
+    setUploadError(null);
+    setSelectedFile(null);
   }
 
   const displayName =
@@ -295,13 +394,12 @@ export default function ProfilePage() {
   const canEdit = !loading && !!profile;
 
   const avatarBadge = useMemo(() => {
-    if (!avatarUrl?.trim()) return null;
-    if (!avatarUrlValid) return { text: "Link inválido", tone: "warn" as const };
+    if (!avatarUrl?.trim()) return { text: "Sem avatar", tone: "neutral" as const };
     if (avatarCheck === "checking") return { text: "Verificando…", tone: "neutral" as const };
     if (avatarCheck === "ok") return { text: "Avatar OK", tone: "ok" as const };
     if (avatarCheck === "fail") return { text: "Falhou", tone: "warn" as const };
-    return null;
-  }, [avatarUrl, avatarUrlValid, avatarCheck]);
+    return { text: "—", tone: "neutral" as const };
+  }, [avatarUrl, avatarCheck]);
 
   function badgeStyle(tone: "neutral" | "ok" | "warn") {
     if (tone === "ok") {
@@ -321,6 +419,8 @@ export default function ProfilePage() {
       background: "rgba(255,255,255,0.03)",
     };
   }
+
+  const avatarAbsolute = avatarUrl?.trim() ? toAbsoluteCdnUrl(avatarUrl) : "";
 
   return (
     <div className="hdud-page">
@@ -371,7 +471,21 @@ export default function ProfilePage() {
             </div>
           ) : null}
 
-          {!error && status ? (
+          {uploadError ? (
+            <div
+              style={{
+                padding: 12,
+                borderRadius: 12,
+                border: "1px solid rgba(255,0,0,0.25)",
+                background: "rgba(255,0,0,0.08)",
+                marginBottom: 12,
+              }}
+            >
+              {uploadError}
+            </div>
+          ) : null}
+
+          {!error && !uploadError && status ? (
             <div
               style={{
                 padding: 12,
@@ -438,59 +552,73 @@ export default function ProfilePage() {
                 </label>
 
                 <div style={{ display: "grid", gap: 8 }}>
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <div style={{ opacity: 0.9, fontSize: 13 }}>Avatar (URL da imagem)</div>
-                    <input
-                      className="hdud-input"
-                      value={avatarUrl}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setAvatarUrl(v);
-                        setAvatarCheck("idle");
-                        setAvatarHint(null);
-                        // ✅ invalida checagens anteriores imediatamente
-                        avatarCheckSeq.current += 1;
-                      }}
-                      onBlur={() => checkAvatar(avatarUrl)}
-                      placeholder="https://… (link direto para uma imagem)"
-                      maxLength={400}
-                      disabled={!canEdit}
-                    />
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={{ opacity: 0.9, fontSize: 13 }}>Avatar</div>
 
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        disabled={!canEdit || uploading || saving || loading}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] || null;
+                          setSelectedFile(f);
+                          setUploadError(null);
+                          setStatus(null);
+                        }}
+                      />
+
+                      <button
+                        className="hdud-btn hdud-btn-primary"
+                        type="button"
+                        onClick={onUploadAvatar}
+                        disabled={!canEdit || uploading || !selectedFile}
+                        title="Enviar avatar para o servidor"
+                      >
+                        {uploading ? "Enviando…" : "Enviar"}
+                      </button>
+
                       <button
                         className="hdud-btn"
                         type="button"
                         disabled={!canEdit || saving || loading}
                         onClick={() => checkAvatar(avatarUrl)}
-                        title="Validar se a imagem carrega"
+                        title="Validar se o avatar carrega"
                       >
-                        Validar link
+                        Validar
                       </button>
 
-                      {avatarBadge ? (
-                        <div
-                          style={{
-                            padding: "6px 10px",
-                            borderRadius: 999,
-                            fontSize: 12,
-                            fontWeight: 800,
-                            ...badgeStyle(avatarBadge.tone),
-                          }}
-                        >
-                          {avatarBadge.text}
-                        </div>
-                      ) : null}
+                      <div
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 800,
+                          ...badgeStyle(avatarBadge.tone),
+                        }}
+                      >
+                        {avatarBadge.text}
+                      </div>
                     </div>
 
                     {avatarHint ? (
                       <div style={{ opacity: 0.75, fontSize: 12 }}>{avatarHint}</div>
                     ) : (
                       <div style={{ opacity: 0.6, fontSize: 12 }}>
-                        O avatar aparece no topo do app. Aqui você só define o link.
+                        O avatar é gerenciado pelo backend. URL canônica:{" "}
+                        <b>/cdn/avatars/&lt;authorId&gt;/avatar</b> (sem extensão).
                       </div>
                     )}
-                  </label>
+
+                    {/* ✅ Sem input editável de URL (evita retrabalho e bug de extensão) */}
+                    {avatarUrl?.trim() ? (
+                      <div style={{ opacity: 0.6, fontSize: 12 }}>
+                        Atual: <code>{avatarAbsolute}</code>
+                      </div>
+                    ) : (
+                      <div style={{ opacity: 0.6, fontSize: 12 }}>Nenhum avatar enviado ainda.</div>
+                    )}
+                  </div>
                 </div>
               </div>
 

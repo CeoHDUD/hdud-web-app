@@ -2,29 +2,41 @@
 
 /**
  * HDUD Theme vNext — Light (default) + Dark (toggle via data-theme no <html>)
- * - NÃO mexe em Memórias/Core
- * - Conserta o "Vite template" que estava forçando layout centralizado (body flex + place-items)
- * - Define as variáveis usadas no AppShell: --hdud-surface, --hdud-border, etc.
+ * Investor-grade: tokens + kit global de layout
+ *
+ * ✅ Regras Kasparov:
+ * - CSS global só para tokens + kit (cards/botões/layout) — nada de “gambiarras por página”
+ * - Dashboard tem classes (.hdud-page-dashboard / .hdud-dash-*) para 3 colunas sticky + centro rolando
+ * - Evitar !important ao máximo
+ * - min-height:0 onde precisa (grid/overflow)
  */
 
+/* =========================
+   LIGHT (DEFAULT)
+   ========================= */
 :root {
-  --hdud-bg: #0b0f14;
-  --hdud-surface: rgba(240, 240, 240, 0.92);
+  /* Base */
+  --hdud-bg: #f6f1e7; /* creme light */
+  --hdud-surface: rgba(255, 255, 255, 0.92);
   --hdud-surface-2: rgba(255, 255, 255, 0.82);
-  --hdud-card: rgba(240, 240, 240, 0.92);
-  --hdud-border: rgba(0, 0, 0, 0.12);
+  --hdud-card: rgba(255, 255, 255, 0.92);
+
+  --hdud-border: rgba(15, 23, 42, 0.12);
   --hdud-text: #0f172a;
   --hdud-muted: rgba(15, 23, 42, 0.65);
 
-  --hdud-accent-bg: rgba(60, 120, 255, 0.18);
-  --hdud-accent-border: rgba(60, 120, 255, 0.35);
+  /* Accent */
+  --hdud-accent-bg: rgba(60, 120, 255, 0.14);
+  --hdud-accent-border: rgba(60, 120, 255, 0.30);
 
+  /* Primary */
   --hdud-primary-bg: rgba(20, 30, 50, 0.95);
   --hdud-primary-text: #ffffff;
 
-  --hdud-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  /* Shadow */
+  --hdud-shadow: 0 6px 18px rgba(15, 23, 42, 0.10);
 
-  /* ✅ Tokens "investor-grade" para mensagens e foco */
+  /* mensagens e foco */
   --hdud-success-bg: rgba(0, 200, 120, 0.10);
   --hdud-success-border: rgba(0, 200, 120, 0.28);
   --hdud-danger-bg: rgba(255, 60, 60, 0.10);
@@ -34,47 +46,26 @@
 
   --hdud-focus: rgba(60, 120, 255, 0.55);
 
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
-    sans-serif;
+  /* Layout constants (p/ cálculos previsíveis) */
+  --hdud-page-pad: 18px;
+  --hdud-topbar-h: 56px; /* se mudar AppShell, mude aqui */
+
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ✅ Estado "Light/Creme" (default do produto) */
+/* ✅ Estado Light (default do produto) */
 html[data-theme="light"] {
   color-scheme: light;
-
-  --hdud-bg: #0b0f14;
-  --hdud-surface: rgba(240, 240, 240, 0.92);
-  --hdud-surface-2: rgba(255, 255, 255, 0.82);
-  --hdud-card: rgba(240, 240, 240, 0.92);
-  --hdud-border: rgba(0, 0, 0, 0.12);
-  --hdud-text: #0f172a;
-  --hdud-muted: rgba(15, 23, 42, 0.65);
-
-  --hdud-accent-bg: rgba(60, 120, 255, 0.18);
-  --hdud-accent-border: rgba(60, 120, 255, 0.35);
-
-  --hdud-primary-bg: rgba(20, 30, 50, 0.95);
-  --hdud-primary-text: #ffffff;
-
-  --hdud-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
-
-  --hdud-success-bg: rgba(0, 200, 120, 0.10);
-  --hdud-success-border: rgba(0, 200, 120, 0.28);
-  --hdud-danger-bg: rgba(255, 60, 60, 0.10);
-  --hdud-danger-border: rgba(255, 60, 60, 0.26);
-  --hdud-warn-bg: rgba(255, 165, 0, 0.12);
-  --hdud-warn-border: rgba(255, 165, 0, 0.28);
-
-  --hdud-focus: rgba(60, 120, 255, 0.55);
 }
 
-/* ✅ Estado Dark (opcional pelo usuário) */
+/* =========================
+   DARK (OPTIONAL)
+   ========================= */
 html[data-theme="dark"] {
   color-scheme: dark;
 
@@ -82,6 +73,7 @@ html[data-theme="dark"] {
   --hdud-surface: rgba(18, 24, 34, 0.92);
   --hdud-surface-2: rgba(26, 34, 48, 0.88);
   --hdud-card: rgba(18, 24, 34, 0.92);
+
   --hdud-border: rgba(255, 255, 255, 0.10);
   --hdud-text: rgba(255, 255, 255, 0.92);
   --hdud-muted: rgba(255, 255, 255, 0.62);
@@ -93,16 +85,12 @@ html[data-theme="dark"] {
   --hdud-primary-text: #ffffff;
 
   --hdud-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
-
-  --hdud-success-bg: rgba(0, 200, 120, 0.10);
-  --hdud-success-border: rgba(0, 200, 120, 0.28);
-  --hdud-danger-bg: rgba(255, 60, 60, 0.10);
-  --hdud-danger-border: rgba(255, 60, 60, 0.26);
-  --hdud-warn-bg: rgba(255, 165, 0, 0.12);
-  --hdud-warn-border: rgba(255, 165, 0, 0.28);
-
   --hdud-focus: rgba(90, 150, 255, 0.60);
 }
+
+/* =========================
+   RESET / BASE
+   ========================= */
 
 /* ✅ remove o template do Vite que quebrava o layout (body flex + center) */
 html,
@@ -113,11 +101,17 @@ body,
   width: 100%;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   background: var(--hdud-bg);
   color: var(--hdud-text);
-  display: block; /* importante: não centralizar a app */
+  display: block;
 }
 
 a {
@@ -131,23 +125,81 @@ textarea {
   font-family: inherit;
 }
 
+/* Seleção e foco (UX premium) */
+::selection {
+  background: rgba(60, 120, 255, 0.22);
+}
+
+:focus-visible {
+  outline: 3px solid rgba(60, 120, 255, 0.35);
+  outline-offset: 2px;
+}
+
+/* Scrollbar (discreto, sem exagero) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 23, 42, 0.25) transparent;
+}
+
+html[data-theme="dark"] * {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
 /* =========================
-   HDUD UI (investor-grade)
+   HDUD Layout Kit (global)
    ========================= */
 
 .hdud-page {
-  padding: 18px;
+  padding: var(--hdud-page-pad);
+  min-height: 0;
 }
 
+.hdud-container {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  min-height: 0;
+}
+
+/* Cards */
 .hdud-card {
   background: var(--hdud-card);
   border: 1px solid var(--hdud-border);
   border-radius: 16px;
   box-shadow: var(--hdud-shadow);
   padding: 16px;
-  max-width: 980px;
+  width: 100%;
 }
 
+/* Header padrão de página */
+.hdud-pagehead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hdud-pagehead-title {
+  font-size: 26px;
+  font-weight: 950;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.hdud-pagehead-subtitle {
+  margin: 6px 0 0 0;
+  color: var(--hdud-muted);
+  font-weight: 650;
+}
+
+.hdud-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Tipografia */
 .hdud-title {
   font-size: 22px;
   font-weight: 900;
@@ -160,6 +212,49 @@ textarea {
   margin: 0;
 }
 
+/* Stack e grids */
+.hdud-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.hdud-grid-2 {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 900px) {
+  .hdud-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Alerts */
+.hdud-alert {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--hdud-border);
+  background: rgba(255, 255, 255, 0.03);
+  font-weight: 650;
+}
+
+.hdud-alert-success {
+  border-color: var(--hdud-success-border);
+  background: var(--hdud-success-bg);
+}
+
+.hdud-alert-danger {
+  border-color: var(--hdud-danger-border);
+  background: var(--hdud-danger-bg);
+}
+
+.hdud-alert-warn {
+  border-color: var(--hdud-warn-border);
+  background: var(--hdud-warn-bg);
+}
+
+/* Botões */
 .hdud-btn {
   appearance: none;
   border: 1px solid var(--hdud-border);
@@ -167,14 +262,14 @@ textarea {
   color: var(--hdud-text);
   border-radius: 10px;
   padding: 10px 12px;
-  font-weight: 800;
+  font-weight: 850;
   cursor: pointer;
-  transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease,
-    border-color 120ms ease;
+  transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
 }
 
 .hdud-btn:hover {
   box-shadow: var(--hdud-shadow);
+  border-color: var(--hdud-accent-border);
 }
 
 .hdud-btn:active {
@@ -193,6 +288,7 @@ textarea {
   border-color: rgba(0, 0, 0, 0.08);
 }
 
+/* Inputs */
 .hdud-input,
 .hdud-textarea {
   width: 100%;
@@ -203,8 +299,7 @@ textarea {
   color: var(--hdud-text);
   padding: 10px 12px;
   outline: none;
-  transition: box-shadow 120ms ease, border-color 120ms ease,
-    transform 120ms ease;
+  transition: box-shadow 120ms ease, border-color 120ms ease;
 }
 
 .hdud-textarea {
@@ -233,148 +328,142 @@ html[data-theme="dark"] .hdud-textarea:focus {
 }
 
 /* =========================
-   HDUD Layout Kit (global)
+   LivingEcosystem helpers
    ========================= */
 
-.hdud-page {
-  padding: 18px;
-}
-
-.hdud-container {
-  max-width: 1100px;
-}
-
-.hdud-stack {
+.hdud-ecos-grid {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
-.hdud-card {
-  background: var(--hdud-card);
-  border: 1px solid var(--hdud-border);
-  border-radius: 16px;
-  box-shadow: var(--hdud-shadow);
-  padding: 16px;
+@media (max-width: 1100px) {
+  .hdud-ecos-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-/* Header padrão de página */
-.hdud-pagehead {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.hdud-pagehead-title {
-  font-size: 26px;
-  font-weight: 950;
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-
-.hdud-pagehead-subtitle {
-  margin: 6px 0 0 0;
-  color: var(--hdud-muted);
-  font-weight: 600;
-}
-
-.hdud-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-/* Grids consistentes */
-.hdud-grid-2 {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: 1fr 1fr;
-}
-
-@media (max-width: 900px) {
-  .hdud-grid-2 {
+@media (max-width: 700px) {
+  .hdud-ecos-grid {
     grid-template-columns: 1fr;
   }
 }
 
-/* Alerts padronizados */
-.hdud-alert {
+.hdud-ecos-item {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
   padding: 12px;
-  border-radius: 12px;
-  border: 1px solid var(--hdud-border);
-  background: rgba(255, 255, 255, 0.03);
-  font-weight: 650;
+  background: var(--hdud-surface);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
 }
 
-.hdud-alert-success {
-  border-color: var(--hdud-success-border);
-  background: var(--hdud-success-bg);
+html[data-theme="dark"] .hdud-ecos-item {
+  border-color: rgba(255, 255, 255, 0.10);
 }
 
-.hdud-alert-danger {
-  border-color: var(--hdud-danger-border);
-  background: var(--hdud-danger-bg);
-}
-
-.hdud-alert-warn {
-  border-color: var(--hdud-warn-border);
-  background: var(--hdud-warn-bg);
-}
-
-/* Inputs/botões com "cara premium" */
-.hdud-btn {
-  appearance: none;
-  border: 1px solid var(--hdud-border);
-  background: var(--hdud-surface-2);
-  color: var(--hdud-text);
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-weight: 850;
+.hdud-ecos-item[data-clickable="1"] {
   cursor: pointer;
-  transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease,
-    border-color 120ms ease;
 }
 
-.hdud-btn:hover {
+.hdud-ecos-item[data-clickable="1"]:hover {
+  transform: translateY(-1px);
   box-shadow: var(--hdud-shadow);
+  border-color: var(--hdud-accent-border);
 }
 
-.hdud-btn:active {
-  transform: translateY(1px);
+.hdud-ecos-compact {
+  max-height: 340px;
+  overflow: hidden;
+  position: relative;
 }
 
-.hdud-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  box-shadow: none;
+.hdud-ecos-fade {
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 72px;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0), var(--hdud-card));
 }
 
-.hdud-btn-primary {
-  background: var(--hdud-primary-bg);
-  color: var(--hdud-primary-text);
-  border-color: rgba(0, 0, 0, 0.08);
+html[data-theme="dark"] .hdud-ecos-fade {
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--hdud-card));
 }
 
-.hdud-input,
-.hdud-textarea {
-  width: 100%;
-  box-sizing: border-box;
-  border-radius: 12px;
-  border: 1px solid var(--hdud-border);
-  background: var(--hdud-surface-2);
-  color: var(--hdud-text);
-  padding: 10px 12px;
-  outline: none;
-  transition: box-shadow 120ms ease, border-color 120ms ease;
+/* =========================
+   Dashboard — 3 colunas sticky + centro rolando
+   ========================= */
+
+/* Observação:
+   - O body pode ser travado via JS no DashboardPage (melhor controle)
+   - Estas classes garantem “container com altura” e min-height:0 p/ overflow funcionar
+*/
+
+.hdud-page-dashboard {
+  height: 100%;
+  min-height: 0;
 }
 
-.hdud-textarea {
-  resize: vertical;
+.hdud-container-dashboard {
+  height: 100%;
+  min-height: 0;
 }
 
-.hdud-input:focus,
-.hdud-textarea:focus {
-  border-color: var(--hdud-focus);
-  box-shadow: 0 0 0 3px rgba(60, 120, 255, 0.18);
+.hdud-dash-shell {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr) 360px;
+  gap: 12px;
+  align-items: stretch;
+
+  height: calc(100vh - var(--hdud-topbar-h) - (var(--hdud-page-pad) * 2));
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* laterais sticky */
+.hdud-dash-side {
+  position: sticky;
+  top: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden; /* congelado */
+  align-self: start;
+}
+
+/* centro */
+.hdud-dash-center {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ✅ ÚNICO scroll (usar dentro do card do centro, ou wrapper) */
+.hdud-dash-scroll {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+/* Responsivo: em telas menores, volta ao scroll natural */
+@media (max-width: 1100px) {
+  .hdud-dash-shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
+  }
+
+  .hdud-dash-side,
+  .hdud-dash-center {
+    position: static;
+    height: auto;
+    overflow: visible;
+  }
+
+  .hdud-dash-scroll {
+    height: auto;
+    overflow: visible;
+  }
 }

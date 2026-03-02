@@ -9,9 +9,9 @@ type MemoryDetail = {
   id?: number | string;
   authorId?: number | string;
   chapterId?: number | null;
-  phaseId?: number | null;             // ✅ novo (FK real)
-  lifePhase?: string | null;           // ✅ code (CHILDHOOD...)
-  phaseName?: string | null;           // ✅ label do domínio (Infância...)
+  phaseId?: number | null;
+  lifePhase?: string | null;
+  phaseName?: string | null;
   title?: string | null;
   content?: string;
   createdAt?: string;
@@ -55,6 +55,7 @@ function lifePhaseLabel(v?: string | null) {
 
 function getTokenFromStorage(): string | null {
   return (
+    localStorage.getItem("hdud_access_token") ||
     localStorage.getItem("HDUD_TOKEN") ||
     localStorage.getItem("access_token") ||
     localStorage.getItem("token")
@@ -81,7 +82,7 @@ export default function MemoryDetailPage(props: Props) {
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftContent, setDraftContent] = useState("");
-  const [draftLifePhase, setDraftLifePhase] = useState<string>(""); // code
+  const [draftLifePhase, setDraftLifePhase] = useState<string>("");
   const [savingEdit, setSavingEdit] = useState(false);
   const [errorEdit, setErrorEdit] = useState<string | null>(null);
   const [successEdit, setSuccessEdit] = useState<string | null>(null);
@@ -89,6 +90,9 @@ export default function MemoryDetailPage(props: Props) {
   const [diffVA, setDiffVA] = useState<number | null>(null);
   const [diffVB, setDiffVB] = useState<number | null>(null);
   const [showDiff, setShowDiff] = useState(false);
+
+  // ✅ hover das versões (investor-ready)
+  const [hoverVersionKey, setHoverVersionKey] = useState<string | null>(null);
 
   const memoryIdNum = useMemo(() => {
     const n = Number(id);
@@ -99,10 +103,8 @@ export default function MemoryDetailPage(props: Props) {
   const versionsAbortRef = useRef<AbortController | null>(null);
   const putAbortRef = useRef<AbortController | null>(null);
 
-  const inflightDetail = useRef(false);
-  const inflightVersions = useRef(false);
-
   const hardLogout = useCallback(() => {
+    localStorage.removeItem("hdud_access_token");
     localStorage.removeItem("HDUD_TOKEN");
     localStorage.removeItem("access_token");
     localStorage.removeItem("token");
@@ -117,7 +119,6 @@ export default function MemoryDetailPage(props: Props) {
       surface2: "var(--hdud-surface-2, #fafafa)",
       text: "var(--hdud-text, #0f172a)",
       text2: "var(--hdud-text-2, #666666)",
-      text3: "var(--hdud-text-3, #222222)",
       border: "var(--hdud-border, #d7dbe7)",
       borderSoft: "var(--hdud-border-soft, #eeeeee)",
       shadow: "var(--hdud-shadow, 0 14px 30px rgba(20,20,40,.08))",
@@ -142,9 +143,28 @@ export default function MemoryDetailPage(props: Props) {
     fontSize: 12,
     background: t.mutedBadgeBg,
     color: t.mutedBadgeText,
+    fontWeight: 900,
   };
 
-  const subtle: CSSProperties = { color: t.text2, fontSize: 13 };
+  const subtle: CSSProperties = { color: t.text2, fontSize: 13, fontWeight: 750 };
+
+  // ✅ hover card versões
+  const versionCard: CSSProperties = {
+    border: `1px solid ${t.borderSoft}`,
+    borderRadius: 12,
+    padding: 12,
+    background: t.surface,
+    boxShadow: t.shadow,
+    transition: "transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease",
+    transform: "translate3d(0,0,0)",
+    cursor: "default",
+  };
+
+  const versionCardHover: CSSProperties = {
+    transform: "translate3d(0,-2px,0)",
+    boxShadow: "0 18px 40px rgba(20,20,40,.10)",
+    borderColor: "rgba(0,0,0,0.12)",
+  };
 
   const input: CSSProperties = {
     width: "100%",
@@ -180,9 +200,17 @@ export default function MemoryDetailPage(props: Props) {
   async function readJsonOrText(res: Response): Promise<any> {
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("application/json")) {
-      try { return await res.json(); } catch { return null; }
+      try {
+        return await res.json();
+      } catch {
+        return null;
+      }
     }
-    try { return await res.text(); } catch { return null; }
+    try {
+      return await res.text();
+    } catch {
+      return null;
+    }
   }
 
   function messageFromErrorPayload(payload: any): string | null {
@@ -212,7 +240,11 @@ export default function MemoryDetailPage(props: Props) {
     const ctrl = (init.signal ? null : new AbortController()) as AbortController | null;
     const signal = (init.signal as AbortSignal | undefined) ?? ctrl?.signal;
 
-    const tmr = setTimeout(() => { try { ctrl?.abort(); } catch {} }, timeoutMs);
+    const tmr = setTimeout(() => {
+      try {
+        ctrl?.abort();
+      } catch {}
+    }, timeoutMs);
 
     try {
       const res = await fetch(url, { ...init, signal });
@@ -282,14 +314,7 @@ export default function MemoryDetailPage(props: Props) {
     if (!res.ok) {
       const payload = await readJsonOrText(res);
       const msg = messageFromErrorPayload(payload);
-
-      const txt = typeof payload === "string" ? payload : "";
-      const hint =
-        res.status === 404 && txt.includes("Not Found")
-          ? "Not Found — verifique o proxy do Vite para /api (deve apontar para http://hdud-api:4000)."
-          : null;
-
-      const err: any = new Error(msg || hint || `HTTP ${res.status}`);
+      const err: any = new Error(msg || `HTTP ${res.status}`);
       err.status = res.status;
       err.payload = payload;
       throw err;
@@ -297,7 +322,11 @@ export default function MemoryDetailPage(props: Props) {
 
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("application/json")) {
-      try { return await res.json(); } catch { return null; }
+      try {
+        return await res.json();
+      } catch {
+        return null;
+      }
     }
     return null;
   }
@@ -311,11 +340,11 @@ export default function MemoryDetailPage(props: Props) {
       return;
     }
 
-    try { detailAbortRef.current?.abort(); } catch {}
+    try {
+      detailAbortRef.current?.abort();
+    } catch {}
     const ctrl = new AbortController();
     detailAbortRef.current = ctrl;
-
-    inflightDetail.current = true;
 
     setLoadingDetail(true);
     setErrorDetail(null);
@@ -328,9 +357,9 @@ export default function MemoryDetailPage(props: Props) {
         id: m?.memory_id,
         authorId: m?.author_id,
         chapterId: m?.chapter_id ?? null,
-        phaseId: m?.phase_id ?? null,                 // ✅ agora vem do banco
-        lifePhase: m?.life_phase ?? null,             // ✅ code (CHILDHOOD...)
-        phaseName: m?.phase_name ?? null,             // ✅ label
+        phaseId: m?.phase_id ?? null,
+        lifePhase: m?.life_phase ?? null,
+        phaseName: m?.phase_name ?? null,
         title: m?.title ?? null,
         content: m?.content ?? "",
         createdAt: m?.created_at,
@@ -341,7 +370,6 @@ export default function MemoryDetailPage(props: Props) {
       });
     } catch (e: any) {
       if (isAbortError(e)) return;
-      console.error(e);
       if (e?.status === 401) {
         setErrorDetail("Sessão expirada. Faça login novamente.");
         hardLogout();
@@ -350,7 +378,6 @@ export default function MemoryDetailPage(props: Props) {
       }
     } finally {
       setLoadingDetail(false);
-      inflightDetail.current = false;
     }
   }, [hardLogout, memoryIdNum, token]);
 
@@ -363,11 +390,11 @@ export default function MemoryDetailPage(props: Props) {
       return;
     }
 
-    try { versionsAbortRef.current?.abort(); } catch {}
+    try {
+      versionsAbortRef.current?.abort();
+    } catch {}
     const ctrl = new AbortController();
     versionsAbortRef.current = ctrl;
-
-    inflightVersions.current = true;
 
     setLoadingVersions(true);
     setErrorVersions(null);
@@ -397,7 +424,6 @@ export default function MemoryDetailPage(props: Props) {
       });
     } catch (e: any) {
       if (isAbortError(e)) return;
-      console.error(e);
       if (e?.status === 401) {
         setErrorVersions("Sessão expirada. Faça login novamente.");
         hardLogout();
@@ -407,7 +433,6 @@ export default function MemoryDetailPage(props: Props) {
       setVersions([]);
     } finally {
       setLoadingVersions(false);
-      inflightVersions.current = false;
     }
   }, [hardLogout, memoryIdNum, token]);
 
@@ -457,32 +482,30 @@ export default function MemoryDetailPage(props: Props) {
     }
 
     const titleTrim = (draftTitle ?? "").trim();
-
     const phaseTrim = (draftLifePhase ?? "").trim();
     const phaseValue = phaseTrim ? phaseTrim : null;
 
     const payload: any = {
       content: contentTrim,
       title: titleTrim ? titleTrim : null,
-      life_phase: phaseValue, // ✅ agora persiste via domínio -> phase_id
+      life_phase: phaseValue,
     };
 
-    try { putAbortRef.current?.abort(); } catch {}
+    try {
+      putAbortRef.current?.abort();
+    } catch {}
     const ctrl = new AbortController();
     putAbortRef.current = ctrl;
 
     setSavingEdit(true);
     try {
       await apiPut(`/memory/${memoryIdNum}`, payload, ctrl.signal);
-
       await loadDetail();
       await loadVersions();
-
       setEditing(false);
       setSuccessEdit("Alterações salvas — nova versão registrada.");
     } catch (e: any) {
       if (isAbortError(e)) return;
-      console.error(e);
       if (e?.status === 401) {
         setErrorEdit("Sessão expirada. Faça login novamente.");
         hardLogout();
@@ -498,47 +521,36 @@ export default function MemoryDetailPage(props: Props) {
     if (!memoryIdNum) return;
     if (!canEdit) return;
 
-    if (!token) {
-      setErrorEdit("Sessão expirada. Faça login novamente.");
-      hardLogout();
-      return;
-    }
-
     const ok = window.confirm(
-      `Restaurar a versão v${v.version_number}?\n\n` +
-        `Isso criará uma NOVA versão baseada nessa versão.\n` +
-        `O histórico não será apagado.`
+      `Restaurar a versão v${v.version_number}?\n\nIsso criará uma NOVA versão baseada nessa versão.`
     );
-
     if (!ok) return;
 
     setErrorEdit(null);
     setSuccessEdit(null);
 
-    try { putAbortRef.current?.abort(); } catch {}
+    try {
+      putAbortRef.current?.abort();
+    } catch {}
     const ctrl = new AbortController();
     putAbortRef.current = ctrl;
 
     setSavingEdit(true);
-
     try {
       const payload = {
         title: ((v.title ?? "") as string).trim() || null,
         content: (v.content ?? "").trim(),
-        life_phase: memory?.lifePhase ?? null, // mantém classificação atual
+        life_phase: memory?.lifePhase ?? null,
       };
 
       if (!payload.content) throw new Error("Não é possível restaurar uma versão sem conteúdo.");
 
       await apiPut(`/memory/${memoryIdNum}`, payload, ctrl.signal);
-
       await loadDetail();
       await loadVersions();
-
       setSuccessEdit(`Rollback criado: nova versão baseada na v${v.version_number}.`);
     } catch (e: any) {
       if (isAbortError(e)) return;
-      console.error(e);
       if (e?.status === 401) {
         setErrorEdit("Sessão expirada. Faça login novamente.");
         hardLogout();
@@ -619,12 +631,37 @@ export default function MemoryDetailPage(props: Props) {
 
   return (
     <div style={{ minHeight: "100vh", background: t.pageBg, color: t.text }}>
-      <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
-        <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: t.text2 }}>
+      {/* ✅ Mais largo (mas ainda pode ser limitado pelo AppShell) */}
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 1680,
+          margin: "0 auto",
+          padding: "clamp(16px, 2.2vw, 28px) clamp(16px, 2.8vw, 56px)",
+          boxSizing: "border-box",
+        }}
+      >
+        <div
+          style={{
+            marginBottom: 16,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 12,
+            color: t.text2,
+          }}
+        >
           <button
             type="button"
             onClick={() => nav("/memories")}
-            style={{ border: "none", background: "transparent", padding: 0, color: t.text2, cursor: "pointer", fontWeight: 900 }}
+            style={{
+              border: "none",
+              background: "transparent",
+              padding: 0,
+              color: t.text2,
+              cursor: "pointer",
+              fontWeight: 900,
+            }}
             aria-label="Voltar para Memórias"
             title="Voltar para Memórias"
           >
@@ -637,7 +674,7 @@ export default function MemoryDetailPage(props: Props) {
             style={{
               color: t.text,
               fontWeight: 900,
-              maxWidth: 520,
+              maxWidth: 720,
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -650,7 +687,9 @@ export default function MemoryDetailPage(props: Props) {
 
         {(loadingDetail || loadingVersions) && <p style={{ color: t.text2 }}>Carregando...</p>}
         {errorDetail && <p style={{ color: t.errText }}>{errorDetail}</p>}
-        {!errorDetail && !loadingDetail && !memory && <p style={{ color: t.text2 }}>Memória não encontrada.</p>}
+        {!errorDetail && !loadingDetail && !memory && (
+          <p style={{ color: t.text2 }}>Memória não encontrada.</p>
+        )}
 
         {memory && (
           <>
@@ -669,10 +708,9 @@ export default function MemoryDetailPage(props: Props) {
                 {canEdit && <span style={badge}>Editável</span>}
                 {memory.authorId != null && <span style={badge}>Autor {String(memory.authorId)}</span>}
                 {memory.chapterId != null && <span style={badge}>Capítulo {String(memory.chapterId)}</span>}
-
-                {/* ✅ agora vem do banco */}
                 <span style={badge}>
-                  Fase: {lifePhaseLabel(memory.lifePhase)}{memory.phaseName ? ` (${memory.phaseName})` : ""}
+                  Fase: {lifePhaseLabel(memory.lifePhase)}
+                  {memory.phaseName ? ` (${memory.phaseName})` : ""}
                 </span>
 
                 {memory.isDeleted && (
@@ -688,7 +726,16 @@ export default function MemoryDetailPage(props: Props) {
                 <button
                   onClick={loadDetail}
                   disabled={loadingDetail}
-                  style={{ fontSize: 12, padding: "8px 10px", borderRadius: 10, border: `1px solid ${t.border}`, background: t.surface, color: t.text, cursor: loadingDetail ? "not-allowed" : "pointer", fontWeight: 800 }}
+                  style={{
+                    fontSize: 12,
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    border: `1px solid ${t.border}`,
+                    background: t.surface,
+                    color: t.text,
+                    cursor: loadingDetail ? "not-allowed" : "pointer",
+                    fontWeight: 800,
+                  }}
                 >
                   {loadingDetail ? "Atualizando..." : "Recarregar detalhe"}
                 </button>
@@ -696,7 +743,16 @@ export default function MemoryDetailPage(props: Props) {
                 <button
                   onClick={loadVersions}
                   disabled={loadingVersions}
-                  style={{ fontSize: 12, padding: "8px 10px", borderRadius: 10, border: `1px solid ${t.border}`, background: t.surface, color: t.text, cursor: loadingVersions ? "not-allowed" : "pointer", fontWeight: 800 }}
+                  style={{
+                    fontSize: 12,
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    border: `1px solid ${t.border}`,
+                    background: t.surface,
+                    color: t.text,
+                    cursor: loadingVersions ? "not-allowed" : "pointer",
+                    fontWeight: 800,
+                  }}
                 >
                   {loadingVersions ? "Atualizando..." : "Recarregar versões"}
                 </button>
@@ -706,7 +762,15 @@ export default function MemoryDetailPage(props: Props) {
                 {canEdit && !editing && (
                   <button
                     onClick={startEdit}
-                    style={{ padding: "10px 14px", borderRadius: 12, border: `1px solid ${t.btnPrimaryBg}`, background: t.btnPrimaryBg, color: t.btnPrimaryText, fontWeight: 800, cursor: "pointer" }}
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: 12,
+                      border: `1px solid ${t.btnPrimaryBg}`,
+                      background: t.btnPrimaryBg,
+                      color: t.btnPrimaryText,
+                      fontWeight: 800,
+                      cursor: "pointer",
+                    }}
                   >
                     Editar
                   </button>
@@ -717,7 +781,15 @@ export default function MemoryDetailPage(props: Props) {
                     <button
                       onClick={cancelEdit}
                       disabled={savingEdit}
-                      style={{ padding: "10px 14px", borderRadius: 12, border: `1px solid ${t.border}`, background: t.surface, color: t.text, fontWeight: 800, cursor: savingEdit ? "not-allowed" : "pointer" }}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        border: `1px solid ${t.border}`,
+                        background: t.surface,
+                        color: t.text,
+                        fontWeight: 800,
+                        cursor: savingEdit ? "not-allowed" : "pointer",
+                      }}
                     >
                       Cancelar
                     </button>
@@ -725,7 +797,15 @@ export default function MemoryDetailPage(props: Props) {
                     <button
                       onClick={saveEdit}
                       disabled={savingEdit}
-                      style={{ padding: "10px 14px", borderRadius: 12, border: `1px solid ${t.btnPrimaryBg}`, background: t.btnPrimaryBg, color: t.btnPrimaryText, fontWeight: 900, cursor: savingEdit ? "not-allowed" : "pointer" }}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        border: `1px solid ${t.btnPrimaryBg}`,
+                        background: t.btnPrimaryBg,
+                        color: t.btnPrimaryText,
+                        fontWeight: 900,
+                        cursor: savingEdit ? "not-allowed" : "pointer",
+                      }}
                     >
                       {savingEdit ? "Salvando..." : "Salvar alterações"}
                     </button>
@@ -735,12 +815,31 @@ export default function MemoryDetailPage(props: Props) {
             </div>
 
             {(errorEdit || successEdit) && (
-              <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: `1px solid ${errorEdit ? t.errBorder : t.okBorder}`, background: errorEdit ? t.errBg : t.okBg, color: errorEdit ? t.errText : t.okText, fontWeight: 700 }}>
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: 12,
+                  borderRadius: 12,
+                  border: `1px solid ${errorEdit ? t.errBorder : t.okBorder}`,
+                  background: errorEdit ? t.errBg : t.okBg,
+                  color: errorEdit ? t.errText : t.okText,
+                  fontWeight: 700,
+                }}
+              >
                 {errorEdit ?? successEdit}
               </div>
             )}
 
-            <div style={{ border: `1px solid ${t.borderSoft}`, padding: 16, borderRadius: 12, marginTop: 18, background: t.surface, boxShadow: t.shadow }}>
+            <div
+              style={{
+                border: `1px solid ${t.borderSoft}`,
+                padding: 16,
+                borderRadius: 12,
+                marginTop: 18,
+                background: t.surface,
+                boxShadow: t.shadow,
+              }}
+            >
               <div style={{ opacity: 0.65, fontSize: 12, marginBottom: 8, color: t.text2 }}>
                 {editing ? "Edição (salvar cria nova versão)" : "Conteúdo (estado atual)"}
               </div>
@@ -788,20 +887,28 @@ export default function MemoryDetailPage(props: Props) {
                   </div>
 
                   <div style={{ ...subtle }}>
-                    Ao salvar, o HDUD registra uma <strong>nova versão</strong> (timeline) — não sobrescreve versões anteriores.
+                    Ao salvar, o HDUD registra uma <strong>nova versão</strong> — não sobrescreve versões anteriores.
                   </div>
                 </div>
               )}
             </div>
 
-            {/* A partir daqui: seu timeline/diff continua igual */}
             <div style={{ marginTop: 28 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
                 <h3 style={{ margin: 0 }}>Linha do Tempo (Versões)</h3>
                 <button
                   onClick={loadVersions}
                   disabled={loadingVersions}
-                  style={{ fontSize: 12, padding: "8px 10px", borderRadius: 10, border: `1px solid ${t.border}`, background: t.surface, color: t.text, cursor: loadingVersions ? "not-allowed" : "pointer", fontWeight: 800 }}
+                  style={{
+                    fontSize: 12,
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    border: `1px solid ${t.border}`,
+                    background: t.surface,
+                    color: t.text,
+                    cursor: loadingVersions ? "not-allowed" : "pointer",
+                    fontWeight: 800,
+                  }}
                 >
                   {loadingVersions ? "Atualizando..." : "Recarregar versões"}
                 </button>
@@ -822,42 +929,76 @@ export default function MemoryDetailPage(props: Props) {
                 </div>
               ) : (
                 <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-                  {versions.map((v) => (
-                    <div
-                      key={`${v.memory_id}-${v.version_number}`}
-                      style={{ border: `1px solid ${t.borderSoft}`, borderRadius: 12, padding: 12, background: t.surface, boxShadow: t.shadow }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={badge}>v{v.version_number}</span>
-                          <span style={{ fontWeight: 600, color: t.text }}>{v.title || "(sem título)"}</span>
-                          {v.version_number === currentVersion && (
-                            <span style={{ ...badge, borderColor: t.okBorder, background: t.okBg, color: t.okText }}>
-                              Atual
-                            </span>
-                          )}
-                        </div>
-                        <div style={subtle}>{fmtDateTimeCompactPtBR(v.created_at)}</div>
-                      </div>
+                  {/* ✅ FIX: map com bloco + return (JSX válido) */}
+                  {versions.map((v) => {
+                    const key = `${v.memory_id}-${v.version_number}`;
+                    const isHover = hoverVersionKey === key;
 
-                      <div style={{ marginTop: 8, ...subtle }}>
-                        <div style={{ opacity: 0.75, fontSize: 12, marginBottom: 6 }}>Snapshot</div>
-                        <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.45, color: t.text }}>
-                          {v.content || "(vazio)"}
+                    return (
+                      <div
+                        key={key}
+                        style={{ ...versionCard, ...(isHover ? versionCardHover : undefined) }}
+                        onMouseEnter={() => setHoverVersionKey(key)}
+                        onMouseLeave={() => setHoverVersionKey((cur) => (cur === key ? null : cur))}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <span style={badge}>v{v.version_number}</span>
+                            <span style={{ fontWeight: 900, color: t.text }}>{v.title || "(sem título)"}</span>
+                            {v.version_number === currentVersion && (
+                              <span style={{ ...badge, borderColor: t.okBorder, background: t.okBg, color: t.okText }}>
+                                Atual
+                              </span>
+                            )}
+                          </div>
+                          <div style={subtle}>{fmtDateTimeCompactPtBR(v.created_at)}</div>
                         </div>
-                      </div>
 
-                      {canEdit && v.version_number !== currentVersion && (
-                        <button
-                          onClick={() => restoreVersion(v)}
-                          disabled={savingEdit}
-                          style={{ marginTop: 10, padding: "6px 10px", borderRadius: 10, border: `1px solid ${t.btnPrimaryBg}`, background: t.surface, color: t.text, fontWeight: 800, fontSize: 12, cursor: savingEdit ? "not-allowed" : "pointer" }}
-                        >
-                          🔁 Restaurar esta versão
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                        <div style={{ marginTop: 8 }}>
+                          <div style={{ opacity: 0.75, fontSize: 12, marginBottom: 6, color: t.text2, fontWeight: 900 }}>
+                            Snapshot
+                          </div>
+
+                          {/* ✅ clamp 3 linhas (investor-ready) */}
+                          <div
+                            style={{
+                              whiteSpace: "pre-wrap",
+                              lineHeight: 1.5,
+                              color: t.text,
+                              display: "-webkit-box",
+                              WebkitLineClamp: 3,
+                              WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
+                              fontWeight: 700,
+                              opacity: 0.95,
+                            }}
+                          >
+                            {v.content || "(vazio)"}
+                          </div>
+                        </div>
+
+                        {canEdit && v.version_number !== currentVersion && (
+                          <button
+                            onClick={() => restoreVersion(v)}
+                            disabled={savingEdit}
+                            style={{
+                              marginTop: 10,
+                              padding: "7px 10px",
+                              borderRadius: 10,
+                              border: `1px solid ${t.btnPrimaryBg}`,
+                              background: t.surface,
+                              color: t.text,
+                              fontWeight: 900,
+                              fontSize: 12,
+                              cursor: savingEdit ? "not-allowed" : "pointer",
+                            }}
+                          >
+                            Restaurar esta versão
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -874,31 +1015,43 @@ export default function MemoryDetailPage(props: Props) {
                     <select
                       value={diffVA ?? ""}
                       onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setDiffVA(Number.isFinite(v) ? v : null);
+                        const vv = Number(e.target.value);
+                        setDiffVA(Number.isFinite(vv) ? vv : null);
                         setShowDiff(false);
                       }}
-                      style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${t.border}`, background: t.surface, color: t.text }}
+                      style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${t.border}`, background: t.surface, color: t.text, fontWeight: 900 }}
                     >
                       <option value="">Versão A</option>
-                      {versions.map((x) => x.version_number).filter((x, idx, arr) => arr.indexOf(x) === idx).sort((a, b) => a - b).map((vn) => (
-                        <option key={`a-${vn}`} value={vn}>v{vn}</option>
-                      ))}
+                      {versions
+                        .map((x) => x.version_number)
+                        .filter((x, idx, arr) => arr.indexOf(x) === idx)
+                        .sort((a, b) => a - b)
+                        .map((vn) => (
+                          <option key={`a-${vn}`} value={vn}>
+                            v{vn}
+                          </option>
+                        ))}
                     </select>
 
                     <select
                       value={diffVB ?? ""}
                       onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setDiffVB(Number.isFinite(v) ? v : null);
+                        const vv = Number(e.target.value);
+                        setDiffVB(Number.isFinite(vv) ? vv : null);
                         setShowDiff(false);
                       }}
-                      style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${t.border}`, background: t.surface, color: t.text }}
+                      style={{ padding: "8px 10px", borderRadius: 10, border: `1px solid ${t.border}`, background: t.surface, color: t.text, fontWeight: 900 }}
                     >
                       <option value="">Versão B</option>
-                      {versions.map((x) => x.version_number).filter((x, idx, arr) => arr.indexOf(x) === idx).sort((a, b) => a - b).map((vn) => (
-                        <option key={`b-${vn}`} value={vn}>v{vn}</option>
-                      ))}
+                      {versions
+                        .map((x) => x.version_number)
+                        .filter((x, idx, arr) => arr.indexOf(x) === idx)
+                        .sort((a, b) => a - b)
+                        .map((vn) => (
+                          <option key={`b-${vn}`} value={vn}>
+                            v{vn}
+                          </option>
+                        ))}
                     </select>
 
                     <button
@@ -937,7 +1090,7 @@ export default function MemoryDetailPage(props: Props) {
                     </div>
 
                     {diffRows.length === 0 ? (
-                      <div style={subtle}>Nenhuma diferença detectada (ou conteúdo vazio nas versões selecionadas).</div>
+                      <div style={subtle}>Nenhuma diferença detectada.</div>
                     ) : (
                       <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}>
                         {diffRows.map((row, idx) => {

@@ -1,180 +1,673 @@
 ﻿/* C:\HDUD_DATA\hdud-web-app\src\styles\global.css */
 
-/* HDUD — Tema padrão (Light/Creme) + Dark (via <html data-theme="dark">)
-   - Tokens globais para manter toda a plataforma coesa
-   - Compatível com o que já existe (.hdud-page/.hdud-card etc.)
-   - Adiciona tokens --hdud-* para as telas (Memórias/Detalhe/Settings) obedecerem o tema
-*/
+/**
+ * HDUD — Identity Palettes v1 (Fonte de verdade)
+ * + Dashboard polish (B2) — leveza / micro-contrastes / sombras mais suaves
+ */
 
 :root {
-  /* ===== Base (Light/Creme default) ===== */
-  --bg: #fbf7ef;          /* creme/papel */
-  --surface: #ffffff;     /* cartões */
-  --surface-2: #f6f0e4;   /* variação creme */
-  --text: #1f2937;        /* cinza bem escuro */
-  --muted: #6b7280;       /* cinza médio */
-  --border: rgba(31, 41, 55, 0.12);
+  /* Core surfaces */
+  --hdud-bg: #ffffff;
+  --hdud-surface: rgba(255, 255, 255, 0.92);
+  --hdud-surface-2: rgba(255, 255, 255, 0.84);
+  --hdud-card: var(--hdud-surface);
 
-  --primary: #1f2937;     /* neutro premium */
-  --primary-contrast: #ffffff;
+  /* Typography colors */
+  --hdud-text: rgba(15, 23, 42, 0.95);
+  --hdud-muted: rgba(15, 23, 42, 0.62);
 
-  --radius: 14px;
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.07);
+  /* Borders / hover */
+  --hdud-border: rgba(15, 23, 42, 0.12);
+  --hdud-hover: rgba(15, 23, 42, 0.06);
 
-  --topbar-h: 56px;
-  --sidebar-w: 260px;
+  /* Accent / primary */
+  --hdud-accent-bg: rgba(60, 120, 255, 0.14);
+  --hdud-accent-border: rgba(60, 120, 255, 0.30);
 
-  --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
-    Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  --hdud-primary-bg: rgba(20, 30, 50, 0.95);
+  --hdud-primary-text: #ffffff;
 
-  /* ===== Tokens HDUD (consumidos pelas telas) ===== */
-  --hdud-bg: var(--bg);
-  --hdud-surface: var(--surface);
-  --hdud-surface-2: var(--surface-2);
+  /* Focus */
+  --hdud-focus: rgba(60, 120, 255, 0.55);
 
-  --hdud-text: var(--text);
-  --hdud-text-2: color-mix(in srgb, var(--text) 70%, transparent);
-  --hdud-text-3: color-mix(in srgb, var(--text) 88%, transparent);
+  /* Feedback */
+  --hdud-success-bg: rgba(0, 200, 120, 0.10);
+  --hdud-success-border: rgba(0, 200, 120, 0.28);
+  --hdud-danger-bg: rgba(255, 60, 60, 0.10);
+  --hdud-danger-border: rgba(255, 60, 60, 0.26);
+  --hdud-warn-bg: rgba(255, 165, 0, 0.12);
+  --hdud-warn-border: rgba(255, 165, 0, 0.28);
 
-  --hdud-border: color-mix(in srgb, var(--text) 14%, transparent);
-  --hdud-border-soft: color-mix(in srgb, var(--text) 10%, transparent);
+  /* Shadows (tiers) — B2: mais suaves */
+  --hdud-shadow-0: 0 0 0 rgba(0, 0, 0, 0); /* silencioso de verdade */
+  --hdud-shadow-1: 0 6px 18px rgba(15, 23, 42, 0.08);
+  --hdud-shadow-2: 0 12px 32px rgba(15, 23, 42, 0.12);
+  --hdud-shadow-3: 0 22px 70px rgba(15, 23, 42, 0.16);
 
-  --hdud-shadow: var(--shadow);
+  /* Derived */
+  --hdud-elev-0: color-mix(in srgb, var(--hdud-surface) 100%, transparent);
+  --hdud-elev-1: color-mix(in srgb, var(--hdud-surface) 86%, transparent);
+  --hdud-elev-2: color-mix(in srgb, var(--hdud-surface) 72%, transparent);
 
-  --hdud-accent-bg: color-mix(in srgb, #4f46e5 12%, var(--surface));
-  --hdud-accent-border: color-mix(in srgb, #4f46e5 20%, transparent);
+  --hdud-line-subtle: color-mix(in srgb, var(--hdud-border) 60%, transparent);
+  --hdud-glow: color-mix(in srgb, var(--hdud-accent-border) 55%, transparent);
 
-  --hdud-btn-primary-bg: var(--primary);
-  --hdud-btn-primary-text: var(--primary-contrast);
-  --hdud-btn-disabled: #9aa3b2;
+  /* Aux */
+  --hdud-selection-bg: var(--hdud-accent-bg);
+  --hdud-selection-text: var(--hdud-text);
 
-  --hdud-danger: #b91c1c;
+  --hdud-focus-ring: color-mix(in srgb, var(--hdud-focus) 62%, transparent);
+  --hdud-focus-shadow: 0 0 0 3px color-mix(in srgb, var(--hdud-focus) 25%, transparent);
 
-  --hdud-ok-bg: color-mix(in srgb, #22c55e 10%, var(--surface));
-  --hdud-ok-border: color-mix(in srgb, #22c55e 28%, transparent);
-  --hdud-ok-text: color-mix(in srgb, #16a34a 90%, var(--text));
+  --hdud-scrollbar-track: transparent;
+  --hdud-scrollbar-thumb: color-mix(in srgb, var(--hdud-muted) 35%, transparent);
+  --hdud-scrollbar-thumb-hover: color-mix(in srgb, var(--hdud-muted) 52%, transparent);
 
-  --hdud-err-bg: color-mix(in srgb, #ef4444 10%, var(--surface));
-  --hdud-err-border: color-mix(in srgb, #ef4444 30%, transparent);
-  --hdud-err-text: #b91c1c;
+  --hdud-page-pad: 18px;
+  --hdud-topbar-h: 56px;
 
-  --hdud-badge-bg: color-mix(in srgb, var(--surface-2) 70%, var(--surface));
-  --hdud-badge-border: color-mix(in srgb, var(--text) 16%, transparent);
-  --hdud-badge-text: var(--hdud-text);
+  /* =========================================================
+     DASHBOARD KIT (B2) — mais leve / menos “névoa”
+     ========================================================= */
+
+  /* inks (reduzidos) */
+  --hdud-dash-ink10: color-mix(in srgb, var(--hdud-text) 8%, transparent);
+  --hdud-dash-ink14: color-mix(in srgb, var(--hdud-text) 11%, transparent);
+  --hdud-dash-ink18: color-mix(in srgb, var(--hdud-text) 14%, transparent);
+  --hdud-dash-ink24: color-mix(in srgb, var(--hdud-text) 17%, transparent);
+  --hdud-dash-ink30: color-mix(in srgb, var(--hdud-text) 20%, transparent);
+  --hdud-dash-ink42: color-mix(in srgb, var(--hdud-text) 26%, transparent);
+  --hdud-dash-ink60: color-mix(in srgb, var(--hdud-text) 32%, transparent);
+
+  /* lines */
+  --hdud-dash-line-soft: color-mix(in srgb, var(--hdud-border) 62%, transparent);
+  --hdud-dash-line-hard: color-mix(in srgb, var(--hdud-border) 95%, transparent);
+
+  /* warmth/live (contido) */
+  --hdud-dash-warmth: color-mix(in srgb, var(--hdud-warn-border) 60%, transparent);
+  --hdud-dash-warmth-bg: color-mix(in srgb, var(--hdud-warn-bg) 70%, transparent);
+
+  --hdud-dash-live: color-mix(in srgb, var(--hdud-success-border) 72%, transparent);
+  --hdud-dash-live-glow: color-mix(in srgb, var(--hdud-success-border) 40%, transparent);
+  --hdud-dash-live-dot-shadow: 0 0 14px var(--hdud-dash-live-glow);
+
+  /* hover (menos agressivo) */
+  --hdud-dash-hover-shadow: var(--hdud-shadow-2);
+  --hdud-dash-active-shadow: var(--hdud-shadow-1);
+  --hdud-dash-mini-hover-shadow: var(--hdud-shadow-1);
+  --hdud-dash-hover-border: color-mix(in srgb, var(--hdud-border) 85%, transparent);
+
+  /* divider */
+  --hdud-dash-divider: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--hdud-border) 0%, transparent),
+    color-mix(in srgb, var(--hdud-border) 80%, transparent),
+    color-mix(in srgb, var(--hdud-border) 0%, transparent)
+  );
+
+  /* page bg */
+  --hdud-dash-page-bg: radial-gradient(1100px 620px at 18% 4%, var(--hdud-dash-ink14) 0%, var(--hdud-dash-ink10) 55%),
+    linear-gradient(180deg, var(--hdud-dash-ink10), transparent);
+
+  /* blocks */
+  --hdud-dash-composer-bg: radial-gradient(900px 420px at 25% 20%, var(--hdud-dash-warmth-bg) 0%, transparent 60%),
+    linear-gradient(180deg, var(--hdud-dash-ink18), transparent);
+
+  /* ✅ B2: manifesto NÃO escurece o topo — usa surfaces */
+  --hdud-dash-manifesto-bg:
+    radial-gradient(1200px 520px at 18% 18%, var(--hdud-dash-warmth-bg) 0%, transparent 58%),
+    radial-gradient(900px 420px at 92% 10%, var(--hdud-dash-live-glow) 0%, transparent 66%),
+    linear-gradient(180deg, var(--hdud-surface), var(--hdud-surface-2));
+
+  /* manifesto overlays (B2) — leves */
+  --hdud-dash-manifesto-before: radial-gradient(900px 380px at 12% 18%, color-mix(in srgb, var(--hdud-warn-bg) 55%, transparent) 0%, transparent 60%),
+    radial-gradient(900px 380px at 88% 12%, color-mix(in srgb, var(--hdud-success-bg) 35%, transparent) 0%, transparent 62%),
+    linear-gradient(180deg, color-mix(in srgb, var(--hdud-text) 14%, transparent), transparent 60%, transparent);
+  --hdud-dash-manifesto-before-opacity: 0.30;
+
+  --hdud-dash-manifesto-after: repeating-linear-gradient(
+    0deg,
+    color-mix(in srgb, var(--hdud-border) 20%, transparent),
+    color-mix(in srgb, var(--hdud-border) 20%, transparent) 1px,
+    transparent 2px,
+    transparent 7px
+  );
+  --hdud-dash-manifesto-after-opacity: 0.05;
+
+  --hdud-dash-title-shadow: 0 14px 52px color-mix(in srgb, var(--hdud-text) 32%, transparent);
+
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Tema Dark via <html data-theme="dark"> */
-html[data-theme="dark"] {
-  --bg: #0b0f14;
-  --surface: #111827;
-  --surface-2: #0f172a;
-  --text: #e5e7eb;
-  --muted: #9ca3af;
-  --border: rgba(229, 231, 235, 0.14);
+/* =========================
+   PALETAS (Fonte de verdade)
+   ========================= */
 
-  --primary: #e5e7eb;
-  --primary-contrast: #0b0f14;
+/* Paleta 1 — JARDIM VIVO (default) */
+html[data-hdud-palette="jardim-vivo"] {
+  color-scheme: light;
 
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --hdud-bg: #f6f1e7;
 
-  /* Ajustes finos no Dark (deixa mais “plataforma”) */
-  --hdud-accent-bg: color-mix(in srgb, #60a5fa 10%, var(--surface));
-  --hdud-accent-border: color-mix(in srgb, #60a5fa 22%, transparent);
+  --hdud-surface: color-mix(in srgb, #ffffff 92%, #f6f1e7);
+  --hdud-surface-2: color-mix(in srgb, #ffffff 84%, #f6f1e7);
 
-  --hdud-btn-disabled: color-mix(in srgb, #94a3b8 60%, #111827);
-  --hdud-danger: #f87171;
+  --hdud-text: #0f172a;
+  --hdud-muted: rgba(15, 23, 42, 0.62);
+  --hdud-border: color-mix(in srgb, rgba(15, 23, 42, 0.16) 70%, transparent);
+  --hdud-hover: rgba(15, 23, 42, 0.06);
 
-  --hdud-ok-text: #86efac;
-  --hdud-err-text: #fca5a5;
+  --hdud-accent-bg: rgba(46, 160, 90, 0.14);
+  --hdud-accent-border: rgba(46, 160, 90, 0.30);
+
+  --hdud-primary-bg: rgba(20, 30, 50, 0.95);
+  --hdud-primary-text: #ffffff;
+
+  --hdud-focus: rgba(46, 160, 90, 0.55);
+
+  --hdud-success-bg: rgba(46, 160, 90, 0.12);
+  --hdud-success-border: rgba(46, 160, 90, 0.32);
+  --hdud-warn-bg: rgba(235, 165, 60, 0.16);
+  --hdud-warn-border: rgba(235, 165, 60, 0.34);
+  --hdud-danger-bg: rgba(220, 70, 70, 0.12);
+  --hdud-danger-border: rgba(220, 70, 70, 0.30);
+
+  /* B2 shadows também nas paletas */
+  --hdud-shadow-0: 0 0 0 rgba(0,0,0,0);
+  --hdud-shadow-1: 0 6px 18px rgba(15, 23, 42, 0.08);
+  --hdud-shadow-2: 0 12px 32px rgba(15, 23, 42, 0.12);
+  --hdud-shadow-3: 0 22px 70px rgba(15, 23, 42, 0.16);
+
+  --hdud-scrollbar-thumb: color-mix(in srgb, rgba(15, 23, 42, 0.62) 34%, transparent);
+  --hdud-scrollbar-thumb-hover: color-mix(in srgb, rgba(15, 23, 42, 0.62) 52%, transparent);
 }
 
-* { box-sizing: border-box; }
-html, body { height: 100%; }
+/* Paleta 2 — EDITORIAL */
+html[data-hdud-palette="editorial"] {
+  color-scheme: light;
+
+  --hdud-bg: #fbf7ef;
+
+  --hdud-surface: color-mix(in srgb, #ffffff 92%, #fbf7ef);
+  --hdud-surface-2: color-mix(in srgb, #ffffff 84%, #fbf7ef);
+
+  --hdud-text: rgba(17, 24, 39, 0.96);
+  --hdud-muted: rgba(17, 24, 39, 0.62);
+  --hdud-border: color-mix(in srgb, rgba(17, 24, 39, 0.16) 70%, transparent);
+  --hdud-hover: rgba(17, 24, 39, 0.06);
+
+  --hdud-accent-bg: rgba(180, 120, 60, 0.14);
+  --hdud-accent-border: rgba(180, 120, 60, 0.28);
+
+  --hdud-primary-bg: rgba(25, 25, 25, 0.92);
+  --hdud-primary-text: #ffffff;
+
+  --hdud-focus: rgba(180, 120, 60, 0.55);
+
+  --hdud-success-bg: rgba(90, 140, 90, 0.12);
+  --hdud-success-border: rgba(90, 140, 90, 0.30);
+  --hdud-warn-bg: rgba(180, 120, 60, 0.16);
+  --hdud-warn-border: rgba(180, 120, 60, 0.34);
+  --hdud-danger-bg: rgba(200, 70, 70, 0.12);
+  --hdud-danger-border: rgba(200, 70, 70, 0.30);
+
+  --hdud-shadow-0: 0 0 0 rgba(0,0,0,0);
+  --hdud-shadow-1: 0 6px 18px rgba(17, 24, 39, 0.08);
+  --hdud-shadow-2: 0 12px 32px rgba(17, 24, 39, 0.12);
+  --hdud-shadow-3: 0 22px 70px rgba(17, 24, 39, 0.16);
+
+  --hdud-scrollbar-thumb: color-mix(in srgb, rgba(17, 24, 39, 0.62) 34%, transparent);
+  --hdud-scrollbar-thumb-hover: color-mix(in srgb, rgba(17, 24, 39, 0.62) 54%, transparent);
+}
+
+/* Paleta 3 — NOTURNO */
+html[data-hdud-palette="noturno"] {
+  color-scheme: dark;
+
+  --hdud-bg: #070a10;
+
+  --hdud-surface: color-mix(in srgb, rgba(18, 24, 34, 0.92) 100%, transparent);
+  --hdud-surface-2: color-mix(in srgb, rgba(26, 34, 48, 0.88) 100%, transparent);
+
+  --hdud-text: rgba(255, 255, 255, 0.92);
+  --hdud-muted: rgba(255, 255, 255, 0.62);
+  --hdud-border: rgba(255, 255, 255, 0.10);
+  --hdud-hover: rgba(255, 255, 255, 0.06);
+
+  --hdud-accent-bg: rgba(90, 150, 255, 0.22);
+  --hdud-accent-border: rgba(90, 150, 255, 0.38);
+
+  --hdud-primary-bg: rgba(35, 50, 85, 0.95);
+  --hdud-primary-text: #ffffff;
+
+  --hdud-focus: rgba(90, 150, 255, 0.60);
+
+  --hdud-success-bg: rgba(60, 220, 160, 0.16);
+  --hdud-success-border: rgba(60, 220, 160, 0.34);
+  --hdud-warn-bg: rgba(255, 185, 90, 0.16);
+  --hdud-warn-border: rgba(255, 185, 90, 0.34);
+  --hdud-danger-bg: rgba(255, 90, 120, 0.16);
+  --hdud-danger-border: rgba(255, 90, 120, 0.34);
+
+  --hdud-shadow-0: 0 0 0 rgba(0,0,0,0);
+  --hdud-shadow-1: 0 14px 30px rgba(0, 0, 0, 0.32);
+  --hdud-shadow-2: 0 22px 60px rgba(0, 0, 0, 0.42);
+  --hdud-shadow-3: 0 40px 140px rgba(0, 0, 0, 0.56);
+
+  --hdud-scrollbar-thumb: color-mix(in srgb, rgba(255, 255, 255, 0.62) 38%, transparent);
+  --hdud-scrollbar-thumb-hover: color-mix(in srgb, rgba(255, 255, 255, 0.62) 58%, transparent);
+}
+
+/* Paleta 4 — AURORA */
+html[data-hdud-palette="aurora"] {
+  color-scheme: light;
+
+  --hdud-bg: #f8f6ff;
+
+  --hdud-surface: color-mix(in srgb, #ffffff 92%, #f8f6ff);
+  --hdud-surface-2: color-mix(in srgb, #ffffff 84%, #f8f6ff);
+
+  --hdud-text: rgba(17, 24, 39, 0.96);
+  --hdud-muted: rgba(17, 24, 39, 0.62);
+  --hdud-border: color-mix(in srgb, rgba(17, 24, 39, 0.16) 70%, transparent);
+  --hdud-hover: rgba(17, 24, 39, 0.06);
+
+  --hdud-accent-bg: rgba(140, 90, 255, 0.16);
+  --hdud-accent-border: rgba(140, 90, 255, 0.32);
+
+  --hdud-primary-bg: rgba(40, 35, 70, 0.95);
+  --hdud-primary-text: #ffffff;
+
+  --hdud-focus: rgba(140, 90, 255, 0.55);
+
+  --hdud-success-bg: rgba(60, 180, 180, 0.14);
+  --hdud-success-border: rgba(60, 180, 180, 0.32);
+  --hdud-warn-bg: rgba(210, 120, 255, 0.14);
+  --hdud-warn-border: rgba(210, 120, 255, 0.32);
+  --hdud-danger-bg: rgba(235, 90, 140, 0.14);
+  --hdud-danger-border: rgba(235, 90, 140, 0.30);
+
+  --hdud-shadow-0: 0 0 0 rgba(0,0,0,0);
+  --hdud-scrollbar-thumb: color-mix(in srgb, rgba(17, 24, 39, 0.62) 34%, transparent);
+  --hdud-scrollbar-thumb-hover: color-mix(in srgb, rgba(17, 24, 39, 0.62) 54%, transparent);
+}
+
+/* Paleta 5 — TERRA */
+html[data-hdud-palette="terra"] {
+  color-scheme: light;
+
+  --hdud-bg: #fbf2e8;
+
+  --hdud-surface: color-mix(in srgb, #ffffff 92%, #fbf2e8);
+  --hdud-surface-2: color-mix(in srgb, #ffffff 84%, #fbf2e8);
+
+  --hdud-text: rgba(17, 24, 39, 0.96);
+  --hdud-muted: rgba(17, 24, 39, 0.62);
+  --hdud-border: color-mix(in srgb, rgba(55, 35, 25, 0.22) 60%, transparent);
+  --hdud-hover: rgba(17, 24, 39, 0.06);
+
+  --hdud-accent-bg: rgba(190, 85, 55, 0.14);
+  --hdud-accent-border: rgba(190, 85, 55, 0.30);
+
+  --hdud-primary-bg: rgba(55, 35, 25, 0.95);
+  --hdud-primary-text: #ffffff;
+
+  --hdud-focus: rgba(190, 85, 55, 0.55);
+
+  --hdud-success-bg: rgba(120, 150, 90, 0.14);
+  --hdud-success-border: rgba(120, 150, 90, 0.32);
+  --hdud-warn-bg: rgba(190, 85, 55, 0.16);
+  --hdud-warn-border: rgba(190, 85, 55, 0.34);
+  --hdud-danger-bg: rgba(210, 70, 70, 0.12);
+  --hdud-danger-border: rgba(210, 70, 70, 0.30);
+
+  --hdud-shadow-0: 0 0 0 rgba(0,0,0,0);
+  --hdud-scrollbar-thumb: color-mix(in srgb, rgba(55, 35, 25, 0.62) 34%, transparent);
+  --hdud-scrollbar-thumb-hover: color-mix(in srgb, rgba(55, 35, 25, 0.62) 54%, transparent);
+}
+
+/* =========================
+   COMPAT LEGADO — data-theme
+   ========================= */
+html:not([data-hdud-palette])[data-theme="light"] {
+  color-scheme: light;
+}
+
+html:not([data-hdud-palette])[data-theme="dark"] {
+  color-scheme: dark;
+
+  --hdud-bg: #070a10;
+  --hdud-surface: rgba(18, 24, 34, 0.92);
+  --hdud-surface-2: rgba(26, 34, 48, 0.88);
+
+  --hdud-text: rgba(255, 255, 255, 0.92);
+  --hdud-muted: rgba(255, 255, 255, 0.62);
+  --hdud-border: rgba(255, 255, 255, 0.10);
+  --hdud-hover: rgba(255, 255, 255, 0.06);
+
+  --hdud-accent-bg: rgba(90, 150, 255, 0.22);
+  --hdud-accent-border: rgba(90, 150, 255, 0.38);
+
+  --hdud-primary-bg: rgba(35, 50, 85, 0.95);
+  --hdud-primary-text: #ffffff;
+
+  --hdud-focus: rgba(90, 150, 255, 0.60);
+
+  --hdud-shadow-0: 0 0 0 rgba(0,0,0,0);
+  --hdud-shadow-1: 0 14px 30px rgba(0, 0, 0, 0.32);
+  --hdud-shadow-2: 0 22px 60px rgba(0, 0, 0, 0.42);
+  --hdud-shadow-3: 0 40px 140px rgba(0, 0, 0, 0.56);
+
+  --hdud-scrollbar-thumb: color-mix(in srgb, var(--hdud-muted) 38%, transparent);
+  --hdud-scrollbar-thumb-hover: color-mix(in srgb, var(--hdud-muted) 58%, transparent);
+}
+
+/* =========================
+   RESET / BASE
+   ========================= */
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
 body {
   margin: 0;
-  font-family: var(--font);
-  background: var(--bg);
-  color: var(--text);
+  background: var(--hdud-bg);
+  color: var(--hdud-text);
+  display: block;
 }
 
-a { color: inherit; text-decoration: none; }
-button, input, textarea { font: inherit; }
+a {
+  color: inherit;
+  text-decoration: none;
+}
 
-/* Utilitários mínimos (p/ AppShell e páginas) */
+button,
+input,
+textarea {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--hdud-selection-bg);
+  color: var(--hdud-selection-text);
+}
+
+:focus-visible {
+  outline: 3px solid var(--hdud-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Scrollbar (tokenizado) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hdud-scrollbar-thumb) var(--hdud-scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--hdud-scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--hdud-scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid var(--hdud-scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--hdud-scrollbar-thumb-hover);
+}
+
+/* =========================
+   KIT GLOBAL
+   ========================= */
 .hdud-page {
-  padding: 20px;
+  padding: var(--hdud-page-pad);
+  min-height: 0;
+}
+
+.hdud-container {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  min-height: 0;
 }
 
 .hdud-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 18px;
+  background: var(--hdud-card);
+  border: 1px solid var(--hdud-border);
+  border-radius: 16px;
+  box-shadow: var(--hdud-shadow-1);
+  padding: 16px;
+  width: 100%;
+}
+
+.hdud-pagehead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hdud-pagehead-title {
+  font-size: 26px;
+  font-weight: 950;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.hdud-pagehead-subtitle {
+  margin: 6px 0 0 0;
+  color: var(--hdud-muted);
+  font-weight: 650;
+}
+
+.hdud-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .hdud-title {
   font-size: 22px;
-  font-weight: 650;
+  font-weight: 900;
   letter-spacing: -0.02em;
-  margin: 0 0 6px 0;
+  margin: 0;
 }
 
 .hdud-subtitle {
+  color: var(--hdud-muted);
   margin: 0;
-  color: var(--muted);
-  line-height: 1.45;
 }
 
-/* Botão padrão (usado em Settings e em outros lugares) */
-.hdud-btn {
-  padding: 10px 14px;
+.hdud-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.hdud-grid-2 {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 900px) {
+  .hdud-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Alerts */
+.hdud-alert {
+  padding: 12px;
   border-radius: 12px;
   border: 1px solid var(--hdud-border);
-  background: var(--hdud-surface);
+  background: color-mix(in srgb, var(--hdud-surface) 96%, white);
+  font-weight: 650;
+}
+
+.hdud-alert-success {
+  border-color: var(--hdud-success-border);
+  background: var(--hdud-success-bg);
+}
+
+.hdud-alert-danger {
+  border-color: var(--hdud-danger-border);
+  background: var(--hdud-danger-bg);
+}
+
+.hdud-alert-warn {
+  border-color: var(--hdud-warn-border);
+  background: var(--hdud-warn-bg);
+}
+
+/* Buttons */
+.hdud-btn {
+  appearance: none;
+  border: 1px solid var(--hdud-border);
+  background: var(--hdud-surface-2);
   color: var(--hdud-text);
-  font-weight: 800;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 850;
   cursor: pointer;
+  transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease,
+    border-color 120ms ease;
+}
+
+.hdud-btn:hover {
+  box-shadow: var(--hdud-shadow-1);
+  border-color: var(--hdud-accent-border);
+}
+
+.hdud-btn:active {
+  transform: translateY(1px);
 }
 
 .hdud-btn:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
-  opacity: 0.75;
+  box-shadow: none;
 }
 
-/* ===== HDUD Badge (pill) ===== */
-.hdud-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-
-  padding: 2px 10px;
-  margin-left: 8px;
-
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.4;
-
-  border-radius: 999px;
-  border: 1px solid var(--hdud-badge-border);
-  background: var(--hdud-badge-bg);
-  color: var(--hdud-badge-text);
-
-  white-space: nowrap;
+.hdud-btn-primary {
+  background: var(--hdud-primary-bg);
+  color: var(--hdud-primary-text);
+  border-color: color-mix(in srgb, var(--hdud-border) 60%, transparent);
 }
 
-.hdud-badge--real {
-  background: var(--hdud-ok-bg);
-  border-color: var(--hdud-ok-border);
-  color: var(--hdud-ok-text);
+/* Inputs */
+.hdud-input,
+.hdud-textarea {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--hdud-border);
+  background: var(--hdud-surface-2);
+  color: var(--hdud-text);
+  padding: 10px 12px;
+  outline: none;
+  transition: box-shadow 120ms ease, border-color 120ms ease;
 }
 
-.hdud-badge--placeholder {
-  opacity: 0.7;
+.hdud-textarea {
+  resize: vertical;
 }
 
-.hdud-badge--suggestion {
-  background: var(--hdud-accent-bg);
+.hdud-input::placeholder,
+.hdud-textarea::placeholder {
+  color: color-mix(in srgb, var(--hdud-muted) 70%, transparent);
+}
+
+.hdud-input:focus,
+.hdud-textarea:focus {
+  border-color: var(--hdud-focus);
+  box-shadow: var(--hdud-focus-shadow);
+}
+
+/* LivingEcosystem helpers */
+.hdud-ecos-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1100px) {
+  .hdud-ecos-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .hdud-ecos-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hdud-ecos-item {
+  border: 1px solid var(--hdud-border);
+  border-radius: 14px;
+  padding: 12px;
+  background: var(--hdud-surface);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.hdud-ecos-item[data-clickable="1"] {
+  cursor: pointer;
+}
+
+.hdud-ecos-item[data-clickable="1"]:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--hdud-shadow-1);
   border-color: var(--hdud-accent-border);
+}
+
+.hdud-ecos-compact {
+  max-height: 340px;
+  overflow: hidden;
+  position: relative;
+}
+
+.hdud-ecos-fade {
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 72px;
+  background: linear-gradient(to bottom, transparent, var(--hdud-card));
+}
+
+/* Dashboard — scroll no body */
+.hdud-page-dashboard {
+  padding: 0;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+
+.hdud-container-dashboard {
+  max-width: 1400px;
+  margin: 0 auto;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
 }

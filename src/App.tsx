@@ -23,16 +23,6 @@ import {
 } from "./lib/api";
 
 // =======================
-// Theme
-// =======================
-const THEME_KEY = "hdud_theme";
-type Theme = "light" | "dark";
-
-function applyTheme(theme: Theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-}
-
-// =======================
 // Token helpers
 // =======================
 function getTokenFromStorage(): string | null {
@@ -202,7 +192,6 @@ type DirtyState = {
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
-  const [theme, setTheme] = useState<Theme>("light");
 
   // Timer do refresh preventivo (exp - 90s)
   const refreshTimerRef = useRef<number | null>(null);
@@ -307,10 +296,8 @@ export default function App() {
       setToken(t);
     }
 
-    const savedTheme =
-      (localStorage.getItem(THEME_KEY) as Theme | null) ?? "light";
-    setTheme(savedTheme);
-    applyTheme(savedTheme);
+    // ✅ Tema/Paleta agora é responsabilidade do HdudThemeProvider.
+    // Nada de data-theme/localStorage aqui para evitar colisão.
   }, []);
 
   // =======================
@@ -320,218 +307,171 @@ export default function App() {
     setTokenToStorage(accessToken);
     setToken(accessToken);
 
-    // ✅ volta para onde estava (quando veio de 401/redirect manual)
-    const back = consumeAfterLoginPath();
-    if (back && back !== "/login") {
+    const after = consumeAfterLoginPath();
+    if (after) {
       try {
-        window.location.assign(back);
+        window.location.assign(after);
+        return;
       } catch {
-        window.location.href = back;
-      }
-      return;
-    }
-
-    // fallback
-    if (window.location.pathname === "/login" || window.location.pathname === "/") {
-      try {
-        window.location.assign("/dashboard");
-      } catch {
-        window.location.href = "/dashboard";
+        // ignore
       }
     }
   }
 
   function handleLogout() {
+    // 🔒 guard global
     if (isDirtyNow()) {
       const ok = confirmLeave("Você tem alterações não salvas. Deseja sair mesmo assim?");
       if (!ok) return;
     }
 
-    clearHdudSession();
     try {
-      window.location.assign("/login");
-    } catch {
-      window.location.href = "/login";
+      clearHdudSession();
+      setToken(null);
+      setSessionExpiredNotice(null);
+    } finally {
+      redirectToLogin("logout");
     }
   }
 
   // =======================
-  // Handler global 401
+  // Unauthorized handler (401)
   // =======================
   useEffect(() => {
-    setUnauthorizedHandler(() => {
-      // ✅ guarda “voltar pra onde estava”
-      setAfterLoginPath(
-        window.location.pathname + window.location.search + window.location.hash,
-        "expired"
-      );
+    setUnauthorizedHandler(async (reason) => {
+      debugLog("unauthorized handler fired:", reason);
 
-      // ✅ banner no login
-      setSessionExpiredNotice();
+      // tenta refresh imediato
+      try {
+        const ok = await tryRefreshNow();
+        if (ok) {
+          const t = getTokenFromStorage();
+          if (t) {
+            setTokenToStorage(t);
+            setToken(t);
+            emitAuthRefreshed();
+            return true;
+          }
+        }
+      } catch {
+        // ignore
+      }
 
+      emitAuthFail();
       clearHdudSession();
-      redirectToLogin("expired");
+      setToken(null);
+      setSessionExpiredNotice("Sessão expirada. Faça login novamente.");
+      redirectToLogin("session_expired");
+      return false;
     });
-
-    return () => setUnauthorizedHandler(null);
   }, []);
 
   // =======================
-  // Theme change
-  // =======================
-  function handleThemeChange(next: Theme) {
-    setTheme(next);
-    localStorage.setItem(THEME_KEY, next);
-    applyTheme(next);
-  }
-
-  // =======================
-  // Refresh central (✅ usa refresh_token via lib/api)
-  // =======================
-  async function doRefresh(reason: string) {
-    try {
-      debugLog("refresh start:", reason);
-
-      const ok = await tryRefreshNow(); // ✅ envia refresh_token corretamente
-      if (!ok) {
-        // não tinha refresh token ou falhou
-        setSessionExpiredNotice();
-        emitAuthFail();
-        debugLog("refresh fail(no token):", reason);
-        return;
-      }
-
-      emitAuthRefreshed();
-      debugLog("refresh ok:", reason);
-
-      const newToken = getTokenFromStorage();
-      if (newToken) setToken(newToken);
-    } catch {
-      setSessionExpiredNotice();
-      emitAuthFail();
-      debugLog("refresh fail(exception):", reason);
-    }
-  }
-
-  function shouldRefreshSoon(currentToken: string): boolean {
-    const expMs = getTokenExpMs(currentToken);
-    if (!expMs) return false;
-    const remaining = expMs - Date.now();
-    return remaining <= REFRESH_IF_EXP_WITHIN_MS;
-  }
-
-  // =======================
-  // Auto-refresh preventivo (exp - 90s)
+  // Preventive refresh timer
   // =======================
   useEffect(() => {
-    if (refreshTimerRef.current) {
-      window.clearTimeout(refreshTimerRef.current);
-      refreshTimerRef.current = null;
-    }
-
     if (!token) return;
 
-    const delayMs = computeRefreshDelayMs(token, 90);
-    if (delayMs === null) return;
+    const delay = computeRefreshDelayMs(token, 90);
+    if (delay == null) return;
 
-    debugLog("scheduled refresh in(ms):", delayMs);
+    if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
 
-    refreshTimerRef.current = window.setTimeout(() => {
-      void doRefresh("timer(exp-90s)");
-    }, delayMs);
+    refreshTimerRef.current = window.setTimeout(async () => {
+      try {
+        const ok = await tryRefreshNow();
+        if (ok) {
+          const t = getTokenFromStorage();
+          if (t) {
+            setTokenToStorage(t);
+            setToken(t);
+            emitAuthRefreshed();
+          }
+        }
+      } catch {
+        emitAuthFail();
+      }
+    }, delay);
 
     return () => {
-      if (refreshTimerRef.current) {
-        window.clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = null;
-      }
+      if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   // =======================
-  // Refresh on activity (LinkedIn-like)
+  // Activity refresh
   // =======================
   useEffect(() => {
-    if (!token) return;
-
-    function markActivity() {
+    function onActivity() {
       lastActivityAtRef.current = Date.now();
     }
 
-    async function maybeRefreshOnReturn(reason: string) {
-      if (!token) return;
-
-      const now = Date.now();
-      if (now - lastActivityRefreshAtRef.current < ACTIVITY_REFRESH_THROTTLE_MS) {
-        return;
-      }
-
-      if (!shouldRefreshSoon(token)) return;
-
-      lastActivityRefreshAtRef.current = now;
-      await doRefresh(reason);
-    }
-
-    function onVisibilityChange() {
-      if (document.visibilityState === "visible") {
-        const now = Date.now();
-        const idleFor = now - lastActivityAtRef.current;
-
-        if (idleFor >= IDLE_AFTER_MS) {
-          void maybeRefreshOnReturn("return-from-idle(visibility)");
-        } else {
-          void maybeRefreshOnReturn("focus(visibility)");
-        }
-      }
-    }
-
-    function onFocus() {
-      const now = Date.now();
-      const idleFor = now - lastActivityAtRef.current;
-      if (idleFor >= IDLE_AFTER_MS) {
-        void maybeRefreshOnReturn("return-from-idle(focus)");
-      } else {
-        void maybeRefreshOnReturn("focus(window)");
-      }
-    }
-
-    const activityEvents: Array<keyof WindowEventMap> = [
-      "mousemove",
-      "keydown",
-      "scroll",
-      "click",
-      "touchstart",
-    ];
-
-    for (const ev of activityEvents) {
-      window.addEventListener(ev, markActivity, { passive: true } as any);
-    }
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    window.addEventListener("focus", onFocus);
+    window.addEventListener("mousemove", onActivity);
+    window.addEventListener("keydown", onActivity);
+    window.addEventListener("scroll", onActivity, { passive: true });
+    window.addEventListener("click", onActivity);
 
     return () => {
-      for (const ev of activityEvents) {
-        window.removeEventListener(ev, markActivity as any);
-      }
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("mousemove", onActivity);
+      window.removeEventListener("keydown", onActivity);
+      window.removeEventListener("scroll", onActivity as any);
+      window.removeEventListener("click", onActivity);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const check = async () => {
+      const exp = getTokenExpMs(token);
+      if (!exp) return;
+
+      const now = Date.now();
+      const within = exp - now;
+
+      const idle = now - lastActivityAtRef.current;
+      if (idle < IDLE_AFTER_MS) return;
+
+      if (within <= REFRESH_IF_EXP_WITHIN_MS) {
+        const sinceLast = now - lastActivityRefreshAtRef.current;
+        if (sinceLast < ACTIVITY_REFRESH_THROTTLE_MS) return;
+
+        lastActivityRefreshAtRef.current = now;
+        try {
+          const ok = await tryRefreshNow();
+          if (ok) {
+            const t = getTokenFromStorage();
+            if (t) {
+              setTokenToStorage(t);
+              setToken(t);
+              emitAuthRefreshed();
+            }
+          }
+        } catch {
+          emitAuthFail();
+        }
+      }
+    };
+
+    function onFocus() {
+      void check();
+    }
+
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [token]);
 
-  const isLoggedIn = useMemo(() => Boolean(token), [token]);
+  const isAuthed = useMemo(() => !!token, [token]);
 
-  // ✅ Deslogado: mantém o comportamento atual (Login em qualquer rota),
-  // e garante que /login funcione naturalmente.
-  if (!isLoggedIn || !token) {
-    return <Login onLoggedIn={handleLoggedIn} />;
-  }
-
-  // ✅ Logado: rotas do app + /login redireciona pra dashboard
   return (
     <Routes>
-      <Route path="/login" element={<Navigate to="/dashboard" replace />} />
+      <Route
+        path="/login"
+        element={
+          isAuthed ? <Navigate to="/dashboard" replace /> : <Login onLoggedIn={handleLoggedIn} />
+        }
+      />
 
       <Route element={<AppShell onLogout={handleLogout} />}>
         <Route path="/dashboard" element={<DashboardPage />} />
@@ -540,20 +480,16 @@ export default function App() {
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/profile" element={<ProfilePage />} />
 
-        <Route
-          path="/settings"
-          element={<SettingsPage theme={theme} onThemeChange={handleThemeChange} />}
-        />
+        {/* ✅ Settings agora é 100% paletas (via HdudThemeProvider). */}
+        <Route path="/settings" element={<SettingsPage />} />
 
-        <Route
-          path="/memories"
-          element={<MemoriesPage token={token} onLogout={handleLogout} />}
-        />
-        <Route path="/memories/:id" element={<MemoryDetailPage token={token} />} />
-
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        {/* ✅ Memórias: detalhe antes da lista (garante rota correta /memories/:id) */}
+        <Route path="/memories/:id" element={<MemoryDetailPage token={token} onLogout={handleLogout} />} />
+        <Route path="/memories" element={<MemoriesPage token={token} onLogout={handleLogout} />} />
       </Route>
+
+      <Route path="/" element={<Navigate to={isAuthed ? "/dashboard" : "/login"} replace />} />
+      <Route path="*" element={<Navigate to={isAuthed ? "/dashboard" : "/login"} replace />} />
     </Routes>
   );
 }
