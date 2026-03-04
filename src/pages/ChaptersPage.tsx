@@ -1,45 +1,19 @@
 // C:\HDUD_DATA\hdud-web-app\src\pages\ChaptersPage.tsx
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import ChaptersListPage from "./ChaptersListPage";
 
 /**
- * ChaptersPage (compat)
- * - Mantido para não quebrar imports legados.
- * - Fluxo dedicado real está em:
- *   /chapters        -> ChaptersListPage
- *   /chapters/:id    -> ChapterEditorPage
- */
-
-
-/**
- * ChaptersPage (MVP) — API REAL (sem tocar em Memórias/Core)
- * - Persistência: HDUD-API-Node (banco) -> identity_chapter + identity_chapter_versions
- * - Lista à esquerda + editor à direita
- * - Ações: salvar / publicar / recarregar
+ * ChaptersPage (MVP) — API REAL
+ * + Move A: Capítulos agrupam Memórias (identity_memory_chapter)
  *
- * ✅ Deep-link da Timeline:
- * - Se existir sessionStorage.hdud_open_chapter_id, abre automaticamente esse capítulo ao entrar.
- *
- * ✅ FECHAMENTO “chave de ouro”:
- * (1) Dirty Guard: evita perder texto em demo (prompt ao trocar de capítulo / sair / recarregar).
- * (3) 401 redirect: token expirado -> limpa token + manda para /login com retorno.
- *
- * ✅ FIX (dirty fantasma / corrida):
- * - Request-id guard: ignora respostas velhas (loadList/loadDetail concorrentes).
- * - isDirty = false durante loading/saving (evita prompt durante sincronização).
- *
- * ✅ FIX (dirty fantasma por normalização):
- * - Normaliza CRLF/LF + trailing spaces + newline final antes de comparar snapshot.
- *
- * ✅ UI vNext:
- * - Header/Topbar no estilo “Memórias”: título + CTA + busca + filtros + ordenação + ações.
- * - Card “Histórico” com lista e painel.
+ * ✅ Novo bloco no editor:
+ * - "Memórias deste capítulo" (listar / vincular / remover)
+ * - Picker com busca (reusa /api/memories alias do backend)
  */
 
 type ChapterStatus = "DRAFT" | "PUBLIC";
 type StatusFilter = "ALL" | "DRAFT" | "PUBLIC";
-type SortKey = "RECENT" | "OLD";
+type SortKey = "RECENT" | "OLD" | "TITLE";
 
 type ApiChapterListItem = {
   chapter_id: number;
@@ -63,7 +37,31 @@ type ApiChapterDetail = {
   created_at: string;
   updated_at: string;
   published_at?: string | null;
-  body?: string; // compat legado
+  body?: string;
+  content?: string | null;
+};
+
+// ✅ Memórias (para bloco de vínculo)
+type ChapterMemoryItem = {
+  memory_id: number;
+  author_id?: number;
+  title?: string | null;
+  content?: string | null;
+  created_at?: string;
+  version_number?: number | null;
+  phase_id?: number | null;
+  life_phase?: string | null;
+  phase_name?: string | null;
+};
+
+type ApiChapterMemoriesResponse = {
+  chapter_id: number;
+  items: ChapterMemoryItem[];
+};
+
+type ApiMemoriesAliasResponse = {
+  author_id: number;
+  memories: any[];
 };
 
 function formatDateBR(v?: string | null) {
@@ -71,19 +69,64 @@ function formatDateBR(v?: string | null) {
   try {
     const d = new Date(v);
     if (Number.isNaN(d.getTime())) return "—";
-    return d.toLocaleString("pt-BR");
+    return new Intl.DateTimeFormat("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(d);
   } catch {
     return "—";
   }
 }
 
-const DEFAULT_NEW_TITLE = "Novo capítulo";
-const DEFAULT_NEW_DESCRIPTION = "Uma frase curta: sobre o que é essa fase da sua vida?";
+function formatDateBRShort(v?: string | null) {
+  if (!v) return "—";
+  try {
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return "—";
+    return new Intl.DateTimeFormat("pt-BR", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }).format(d);
+  } catch {
+    return "—";
+  }
+}
 
 function safeTrimOrNull(v: any): string | null {
   if (v == null) return null;
   const s = String(v).trim();
   return s.length ? s : null;
+}
+
+function greetingPTBR(): string {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 12) return "Bom dia";
+  if (h >= 12 && h < 18) return "Boa tarde";
+  return "Boa noite";
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function daysAgoLabel(fromIso: string): string {
+  try {
+    const d = new Date(fromIso);
+    const now = new Date();
+    if (Number.isNaN(d.getTime())) return "há algum tempo";
+    if (isSameDay(d, now)) return "hoje";
+    const diffMs = now.getTime() - d.getTime();
+    const days = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+    if (days <= 0) return "hoje";
+    if (days === 1) return "há 1 dia";
+    return `há ${days} dias`;
+  } catch {
+    return "há algum tempo";
+  }
 }
 
 function toStatus(v: any): ChapterStatus {
@@ -93,18 +136,43 @@ function toStatus(v: any): ChapterStatus {
 function unwrapList(data: any): ApiChapterListItem[] | null {
   if (!data) return null;
   if (Array.isArray(data)) return data as ApiChapterListItem[];
-  if (Array.isArray((data as any).chapters)) return (data as any).chapters as ApiChapterListItem[];
   if (Array.isArray((data as any).items)) return (data as any).items as ApiChapterListItem[];
-  if ((data as any).data && Array.isArray((data as any).data.chapters)) return (data as any).data.chapters as ApiChapterListItem[];
+  if (Array.isArray((data as any).chapters)) return (data as any).chapters as ApiChapterListItem[];
   if ((data as any).data && Array.isArray((data as any).data.items)) return (data as any).data.items as ApiChapterListItem[];
+  if ((data as any).data && Array.isArray((data as any).data.chapters)) return (data as any).data.chapters as ApiChapterListItem[];
   return null;
 }
 
-function unwrapDetail(data: any): ApiChapterDetail | null {
+function unwrapDetail(data: any): any | null {
   if (!data) return null;
-  if ((data as any).chapter) return (data as any).chapter as ApiChapterDetail; // shape { chapter, current_version }
-  if ((data as any).data && (data as any).data.chapter) return (data as any).data.chapter as ApiChapterDetail;
-  return data as ApiChapterDetail;
+
+  const chapter =
+    (data as any).chapter ??
+    (data as any).data?.chapter ??
+    (data as any).item ??
+    (data as any).data?.item ??
+    data;
+
+  const cur =
+    (data as any).current_version ??
+    (data as any).currentVersion ??
+    (data as any).data?.current_version ??
+    (data as any).data?.currentVersion ??
+    null;
+
+  if (chapter && cur) {
+    const merged = { ...(chapter as any) };
+    const content = cur.content ?? cur.body ?? cur.text ?? cur.chapter_body ?? cur.chapterBody ?? null;
+    if (content != null) {
+      merged.body = content;
+      merged.content = content;
+    }
+    if (cur.version_id != null && merged.current_version_id == null) merged.current_version_id = cur.version_id;
+    if (cur.id != null && merged.current_version_id == null) merged.current_version_id = cur.id;
+    return merged;
+  }
+
+  return chapter ?? null;
 }
 
 type ToastKind = "ok" | "warn" | "err";
@@ -173,7 +241,6 @@ async function apiRequest<T>(
     data = null;
   }
 
-  // ✅ 401 redirect (demo-proof)
   if (resp.status === 401) {
     clearTokenEverywhere();
     redirectToLogin("expired");
@@ -205,7 +272,7 @@ async function tryMany<T>(
       if (r.ok) return { ...last, attempts };
       if (r.status === 401) return { ...last, attempts };
     } catch {
-      // ignora e tenta a próxima
+      // tenta próxima
     }
   }
 
@@ -221,15 +288,6 @@ function formatAttempts(attempts: Array<{ path: string; status: number; ok: bool
   return attempts.length > 4 ? `${short} | …` : short;
 }
 
-function compactText(v: string, max = 120) {
-  const s = (v ?? "").toString().replace(/\s+/g, " ").trim();
-  if (!s) return "";
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
-}
-
-// =======================
-// Deep-link helper
-// =======================
 function consumeOpenChapterHint(): number | null {
   try {
     const v = sessionStorage.getItem("hdud_open_chapter_id");
@@ -244,15 +302,12 @@ function consumeOpenChapterHint(): number | null {
 
 type Snapshot = { title: string; description: string; body: string; status: ChapterStatus };
 
-// =======================
-// Normalização (evita dirty fantasma)
-// =======================
 function normText(v: any): string {
   const s = String(v ?? "");
   const noBom = s.replace(/^\uFEFF/, "");
   const lf = noBom.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const trimLineEnds = lf.replace(/[ \t]+$/gm, "");
-  const trimEndNewlines = trimLineEnds.replace(/\n+$/g, "\n"); // no máximo 1 newline final
+  const trimEndNewlines = trimLineEnds.replace(/\n+$/g, "\n");
   return trimEndNewlines;
 }
 function normTitle(v: any): string {
@@ -270,7 +325,6 @@ function normSnap(s: Snapshot): Snapshot {
   };
 }
 
-// diagnóstico do dirty
 function diffDirty(current: Snapshot, snap: Snapshot) {
   const diffs: string[] = [];
   if (current.title !== snap.title) diffs.push(`title (${current.title.length} vs ${snap.title.length})`);
@@ -293,8 +347,17 @@ function diffDirty(current: Snapshot, snap: Snapshot) {
   return diffs;
 }
 
+const DEFAULT_NEW_TITLE = "Novo capítulo";
+const DEFAULT_NEW_DESCRIPTION = "Uma frase curta: sobre o que é essa fase da sua vida?";
+
+function safeText(v: any, max = 240) {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
+}
+
 export default function ChaptersPage() {
-  // ✅ token/authorId NÃO congelados: acompanham login/renovação
   const token = getToken();
   const canUseApi = !!token;
 
@@ -305,55 +368,62 @@ export default function ChaptersPage() {
     return Number.isFinite(n) && n > 0 ? n : null;
   }, [jwt]);
 
+  const [mode, setMode] = useState<"list" | "edit">("list");
+
   const [items, setItems] = useState<ApiChapterListItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [q, setQ] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [sortKey, setSortKey] = useState<SortKey>("RECENT");
+
+  const [hoverId, setHoverId] = useState<number | null>(null);
+
   const [selectedChapterId, setSelectedChapterId] = useState<number | null>(null);
-  // capítulo atualmente aberto no painel direito (editor)
   const [openChapterId, setOpenChapterId] = useState<number | null>(null);
+
+  const [isNewUnsaved, setIsNewUnsaved] = useState<boolean>(false);
 
   const [title, setTitle] = useState<string>("");
   const [description, setDescription] = useState<string>("");
   const [body, setBody] = useState<string>("");
-
   const [status, setStatus] = useState<ChapterStatus>("DRAFT");
-  const [versionLabel, setVersionLabel] = useState<string>("v1");
 
+  const [versionLabel, setVersionLabel] = useState<string>("v1");
   const [createdAt, setCreatedAt] = useState<string>("—");
   const [updatedAt, setUpdatedAt] = useState<string>("—");
   const [publishedAt, setPublishedAt] = useState<string>("—");
 
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<any>(null);
 
-  // diagnóstico leve
   const [lastApiInfo, setLastApiInfo] = useState<string>("");
   const [showDiag, setShowDiag] = useState<boolean>(false);
-  const [showGuide, setShowGuide] = useState<boolean>(false);
-
-  // ✅ Header controls “estilo Memórias”
-  const [q, setQ] = useState<string>("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
-  const [sortKey, setSortKey] = useState<SortKey>("RECENT");
 
   const didFocusTitle = useRef(false);
   const didFocusDesc = useRef(false);
 
   const pendingOpenChapterIdRef = useRef<number | null>(consumeOpenChapterHint());
 
-  // ✅ request-id guard (mata corrida)
   const listSeqRef = useRef(0);
   const detailSeqRef = useRef(0);
 
-  // =======================
-  // Dirty Guard
-  // =======================
   const snapshotRef = useRef<Snapshot | null>(null);
+
+  // ==============================
+  // ✅ Move A: vínculo de memórias
+  // ==============================
+  const [chapterMemories, setChapterMemories] = useState<ChapterMemoryItem[]>([]);
+  const [loadingMemories, setLoadingMemories] = useState(false);
+
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQ, setPickerQ] = useState("");
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerItems, setPickerItems] = useState<ChapterMemoryItem[]>([]);
 
   const isDirty = useMemo(() => {
     if (loading || saving) return false;
-
     const snap = snapshotRef.current;
     if (!snap) return false;
 
@@ -394,6 +464,19 @@ export default function ChaptersPage() {
   }
 
   useEffect(() => {
+    try {
+      const ev = new CustomEvent("hdud:dirty", {
+        detail: {
+          dirty: !!isDirty,
+          message: "Você tem alterações não salvas no capítulo. Deseja sair sem salvar?",
+          source: "chapters",
+        },
+      });
+      window.dispatchEvent(ev);
+    } catch {}
+  }, [isDirty]);
+
+  useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (!isDirty) return;
       e.preventDefault();
@@ -403,26 +486,6 @@ export default function ChaptersPage() {
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [isDirty]);
-
-  useEffect(() => {
-    try {
-      const onStorage = (e: StorageEvent) => {
-        if (!e) return;
-        if (e.storageArea !== sessionStorage) return;
-        if (e.key !== "hdud_open_chapter_id") return;
-        const n = Number(String(e.newValue ?? "").trim());
-        if (Number.isFinite(n) && n > 0) {
-          pendingOpenChapterIdRef.current = n;
-          void loadList();
-        }
-      };
-      window.addEventListener("storage", onStorage as any);
-      return () => window.removeEventListener("storage", onStorage as any);
-    } catch {
-      return;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   function setToastAuto(t: Toast | null, ms = 3500) {
     setToast(t);
@@ -441,33 +504,93 @@ export default function ChaptersPage() {
       setToastAuto({ kind: "warn", msg: "Token ausente. Faça login para ver/editar capítulos." });
       return true;
     }
-
     const j = parseJwtPayload(t);
     const a = j?.author_id ?? j?.authorId ?? j?.sub_author_id ?? null;
     const n = Number(a);
-
     if (!(Number.isFinite(n) && n > 0)) {
       setToastAuto({ kind: "warn", msg: "Não consegui identificar author_id no token. Refaça login." });
       return true;
     }
-
     return false;
+  }
+
+  function goEditMode() {
+    setMode("edit");
+    try {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch {}
+  }
+
+  function goListMode() {
+    if (!confirmIfDirty("Voltar para lista")) return;
+    setMode("list");
+    setOpenChapterId(null);
+    setIsNewUnsaved(false);
+    snapshotRef.current = null;
+    setTitle("");
+    setDescription("");
+    setBody("");
+    setStatus("DRAFT");
+    setVersionLabel("v1");
+    setCreatedAt("—");
+    setUpdatedAt("—");
+    setPublishedAt("—");
+    didFocusTitle.current = false;
+    didFocusDesc.current = false;
+
+    // Move A cleanup
+    setChapterMemories([]);
+    setPickerOpen(false);
+    setPickerQ("");
+    setPickerItems([]);
+  }
+
+  function openLocalNewDraft(preset?: { title: string; description?: string | null }) {
+    if (!confirmIfDirty("Criar novo capítulo")) return;
+
+    setSelectedChapterId(null);
+    setOpenChapterId(null);
+    setIsNewUnsaved(true);
+
+    setTitle(preset?.title ?? DEFAULT_NEW_TITLE);
+    setDescription(String(preset?.description ?? DEFAULT_NEW_DESCRIPTION));
+    setBody("");
+    setStatus("DRAFT");
+    setVersionLabel("v1");
+    setCreatedAt("—");
+    setUpdatedAt("—");
+    setPublishedAt("—");
+
+    snapshotRef.current = normSnap({
+      title: preset?.title ?? DEFAULT_NEW_TITLE,
+      description: String(preset?.description ?? DEFAULT_NEW_DESCRIPTION),
+      body: "",
+      status: "DRAFT",
+    });
+
+    didFocusTitle.current = false;
+    didFocusDesc.current = false;
+
+    // Move A: novo ainda não tem vínculos
+    setChapterMemories([]);
+    setPickerOpen(false);
+    setPickerQ("");
+    setPickerItems([]);
+
+    goEditMode();
   }
 
   async function loadList() {
     if (needAuthGuard()) return;
 
     const seq = ++listSeqRef.current;
-
     setLoading(true);
     setToast(null);
 
     try {
       const result = await tryMany<any>([
         () => apiRequest<any>("/api/chapters", { method: "GET" }),
-        () => apiRequest<any>("/api/chapter", { method: "GET" }),
         () => apiRequest<any>("/api/chapters/list", { method: "GET" }),
-        () => apiRequest<any>("/api/chapter/list", { method: "GET" }),
         () => apiRequest<any>(`/api/authors/${authorId}/chapters`, { method: "GET" }),
         () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "GET" }),
       ]);
@@ -477,7 +600,6 @@ export default function ChaptersPage() {
       setApiInfo("LIST", result.usedPath || "—", result.attempts);
 
       const list = unwrapList(result.data);
-
       if (!result.ok || !list) {
         const hint =
           result.status === 401
@@ -516,27 +638,57 @@ export default function ChaptersPage() {
         const exists = normalized.some((c) => c.chapter_id === pending);
         if (exists) {
           if (!confirmIfDirty("Abrir capítulo vindo da Timeline")) {
-            setToastAuto({
-              kind: "warn",
-              msg: "Você está com alterações não salvas. Salve antes de abrir outro capítulo.",
-            });
+            setToastAuto({ kind: "warn", msg: "Você está com alterações não salvas. Salve antes de abrir outro capítulo." });
             pendingOpenChapterIdRef.current = null;
             return;
           }
           pendingOpenChapterIdRef.current = null;
           await loadDetail(pending);
-          try {
-            window.scrollTo({ top: 0, behavior: "smooth" });
-          } catch {}
           return;
         } else {
           pendingOpenChapterIdRef.current = null;
         }
       }
-
-      // ✅ Não auto-abrir editor: por padrão o painel direito fica em placeholder.
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadChapterMemories(chapterId: number) {
+    if (!chapterId || !Number.isFinite(chapterId)) return;
+    setLoadingMemories(true);
+    try {
+      const result = await tryMany<ApiChapterMemoriesResponse | any>([
+        () => apiRequest<any>(`/api/chapters/${chapterId}/memories`, { method: "GET" }),
+      ]);
+
+      setApiInfo("CHAPTER_MEMORIES", result.usedPath || "—", result.attempts);
+
+      if (!result.ok || !result.data) {
+        // não quebra o editor — só avisa
+        setToastAuto({ kind: "warn", msg: "Não consegui carregar as memórias vinculadas deste capítulo." }, 3200);
+        setChapterMemories([]);
+        return;
+      }
+
+      const items = Array.isArray((result.data as any).items) ? (result.data as any).items : [];
+      const normalized: ChapterMemoryItem[] = items
+        .map((m: any) => ({
+          memory_id: Number(m.memory_id ?? m.id),
+          author_id: m.author_id != null ? Number(m.author_id) : undefined,
+          title: m.title ?? null,
+          content: m.content ?? null,
+          created_at: m.created_at ?? null,
+          version_number: m.version_number != null ? Number(m.version_number) : null,
+          phase_id: m.phase_id != null ? Number(m.phase_id) : null,
+          life_phase: m.life_phase ?? null,
+          phase_name: m.phase_name ?? null,
+        }))
+        .filter((x) => Number.isFinite(x.memory_id) && x.memory_id > 0);
+
+      setChapterMemories(normalized);
+    } finally {
+      setLoadingMemories(false);
     }
   }
 
@@ -544,15 +696,12 @@ export default function ChaptersPage() {
     if (needAuthGuard()) return;
 
     const seq = ++detailSeqRef.current;
-
     setLoading(true);
     setToast(null);
 
     try {
-      const result = await tryMany<any>([
-        () => apiRequest<any>(`/api/chapter/${chapterId}`, { method: "GET" }),
+      const result = await tryMany<ApiChapterDetail | any>([
         () => apiRequest<any>(`/api/chapters/${chapterId}`, { method: "GET" }),
-        () => apiRequest<any>(`/api/chapter/detail/${chapterId}`, { method: "GET" }),
         () => apiRequest<any>(`/api/chapters/detail/${chapterId}`, { method: "GET" }),
       ]);
 
@@ -563,7 +712,6 @@ export default function ChaptersPage() {
       if (!result.ok || !result.data) {
         const hint =
           result.status === 401 ? "401 (token expirado)." : result.status === 404 ? "404 (não encontrado)." : `HTTP ${result.status || "erro"}`;
-
         setToastAuto({ kind: "err", msg: `Falha ao abrir capítulo (${hint}).` });
         return;
       }
@@ -576,10 +724,20 @@ export default function ChaptersPage() {
 
       setSelectedChapterId(chapterId);
       setOpenChapterId(chapterId);
+      setIsNewUnsaved(false);
 
-      setTitle(String(d.title ?? ""));
-      setDescription(String(d.description ?? ""));
-      setBody(normText((d as any).body ?? (d as any).content ?? ""));
+      setTitle(String((d as any).title ?? ""));
+      setDescription(String((d as any).description ?? ""));
+
+      const resolvedBody =
+        (d as any).body ??
+        (d as any).content ??
+        (d as any).text ??
+        (d as any).chapter_body ??
+        (d as any).chapterBody ??
+        "";
+
+      setBody(normText(resolvedBody));
 
       const st = toStatus((d as any).status);
       setStatus(st);
@@ -594,76 +752,67 @@ export default function ChaptersPage() {
           : (d as any).currentVersionId != null
           ? Number((d as any).currentVersionId)
           : null;
+
       setVersionLabel(curVer ? `v${curVer}` : "v1");
 
       snapshotRef.current = normSnap({
-        title: String(d.title ?? ""),
-        description: String(d.description ?? ""),
-        body: normText((d as any).body ?? (d as any).content ?? ""),
+        title: String((d as any).title ?? ""),
+        description: String((d as any).description ?? ""),
+        body: normText(resolvedBody),
         status: st,
       });
 
       didFocusTitle.current = false;
       didFocusDesc.current = false;
+
+      // ✅ Move A: carrega memórias vinculadas
+      await loadChapterMemories(chapterId);
+
+      goEditMode();
     } finally {
       setLoading(false);
     }
   }
 
-  async function createChapter(preset?: { title: string; description?: string | null }) {
-    if (needAuthGuard()) return;
-    if (!confirmIfDirty("Criar novo capítulo")) return;
+  async function createOnServer(payload: { title: string; description: string | null; body: string; status: ChapterStatus }) {
+    if (needAuthGuard()) return null;
 
-    setSaving(true);
-    setToast(null);
+    const postPayload: any = {
+      title: payload.title,
+      description: payload.description,
+      status: payload.status,
+      body: payload.body ?? "",
+    };
 
-    try {
-      const payload = {
-        title: preset?.title ?? DEFAULT_NEW_TITLE,
-        description: preset?.description ?? DEFAULT_NEW_DESCRIPTION,
-        body: "",
-        status: "DRAFT",
-      };
+    const result = await tryMany<any>([
+      () => apiRequest<any>("/api/chapters", { method: "POST", body: JSON.stringify(postPayload) }),
+      () => apiRequest<any>(`/api/authors/${authorId}/chapters`, { method: "POST", body: JSON.stringify(postPayload) }),
+      () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "POST", body: JSON.stringify(postPayload) }),
+    ]);
 
-      const result = await tryMany<any>([
-        () => apiRequest<any>("/api/chapters", { method: "POST", body: JSON.stringify(payload) }),
-        () => apiRequest<any>("/api/chapter", { method: "POST", body: JSON.stringify(payload) }),
-        () => apiRequest<any>(`/api/authors/${authorId}/chapters`, { method: "POST", body: JSON.stringify(payload) }),
-        () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "POST", body: JSON.stringify(payload) }),
-      ]);
+    setApiInfo("CREATE", result.usedPath || "—", result.attempts);
 
-      setApiInfo("CREATE", result.usedPath || "—", result.attempts);
+    if (!result.ok) {
+      const hint =
+        result.status === 401
+          ? "401 (token expirado). Faça login novamente."
+          : result.status === 404
+          ? "404 (rota de criação não existe no backend)."
+          : `HTTP ${result.status || "erro"}`;
 
-      if (!result.ok) {
-        const hint =
-          result.status === 401
-            ? "401 (token expirado). Faça login novamente."
-            : result.status === 404
-            ? "404 (rota de criação não existe no backend)."
-            : `HTTP ${result.status || "erro"}`;
-
-        setToastAuto({ kind: "err", msg: `Erro ao criar capítulo (${hint}).` });
-        return;
-      }
-
-      setToastAuto({ kind: "ok", msg: "Capítulo criado (rascunho)." });
-
-      await loadList();
-
-      const createdId =
-        (result.data as any)?.chapter_id ??
-        (result.data as any)?.id ??
-        (result.data as any)?.chapter?.chapter_id ??
-        (result.data as any)?.data?.chapter_id ??
-        null;
-
-      const cid = Number(createdId);
-      if (Number.isFinite(cid) && cid > 0) {
-        await loadDetail(cid);
-      }
-    } finally {
-      setSaving(false);
+      setToastAuto({ kind: "err", msg: `Erro ao criar capítulo (${hint}).` });
+      return null;
     }
+
+    const createdId =
+      (result.data as any)?.chapter_id ??
+      (result.data as any)?.id ??
+      (result.data as any)?.chapter?.chapter_id ??
+      (result.data as any)?.data?.chapter_id ??
+      null;
+
+    const cid = Number(createdId);
+    return Number.isFinite(cid) && cid > 0 ? cid : null;
   }
 
   async function reloadSelected() {
@@ -673,105 +822,83 @@ export default function ChaptersPage() {
     setToastAuto({ kind: "ok", msg: "Capítulo recarregado." });
   }
 
-  async function saveDraft() {
-    if (needAuthGuard()) return;
-    if (!openChapterId) return;
+  async function saveExistingViaPut(chapterId: number, targetStatusAfterSave?: ChapterStatus) {
+    const payload: any = {
+      title: safeTrimOrNull(title) ?? "",
+      description: safeTrimOrNull(description),
+      body: body ?? "",
+    };
 
-    setSaving(true);
-    setToast(null);
+    const result = await tryMany<any>([
+      () => apiRequest<any>(`/api/chapters/${chapterId}`, { method: "PUT", body: JSON.stringify(payload) }),
+    ]);
 
-    try {
-      const payload = {
-        title: safeTrimOrNull(title) ?? "",
-        description: safeTrimOrNull(description),
-        body: body ?? "",
-        status: "DRAFT",
-      };
+    setApiInfo("SAVE", result.usedPath || "—", result.attempts);
 
-      const result = await tryMany<any>([
-        () =>
-          apiRequest<any>(`/api/chapter/${openChapterId}`, {
-            method: "PUT",
-            body: JSON.stringify(payload),
-          }),
-        () =>
-          apiRequest<any>(`/api/chapters/${openChapterId}`, {
-            method: "PUT",
-            body: JSON.stringify(payload),
-          }),
-      ]);
-
-      setApiInfo("SAVE", result.usedPath || "—", result.attempts);
-
-      if (!result.ok) {
-        const hint =
-          result.status === 401 ? "401 (token expirado)." : result.status === 404 ? "404 (rota não existe)." : `HTTP ${result.status || "erro"}`;
-        setToastAuto({ kind: "err", msg: `Falha ao salvar (${hint}).` });
-        return;
-      }
-
-      snapshotRef.current = normSnap({
-        title: normTitle(title),
-        description: normDesc(description),
-        body: normText(body),
-        status: "DRAFT",
-      });
-
-      setStatus("DRAFT");
-      setToastAuto({ kind: "ok", msg: "Salvo (rascunho)." });
-      await loadList();
-    } finally {
-      setSaving(false);
+    if (!result.ok) {
+      const hint =
+        result.status === 401 ? "401 (token expirado)." : result.status === 404 ? "404 (rota não existe)." : `HTTP ${result.status || "erro"}`;
+      setToastAuto({ kind: "err", msg: `Falha ao salvar (${hint}).` });
+      return false;
     }
+
+    snapshotRef.current = normSnap({
+      title: normTitle(title),
+      description: normDesc(description),
+      body: normText(body),
+      status: targetStatusAfterSave ?? status,
+    });
+
+    setToastAuto({ kind: "ok", msg: "Salvo." });
+    return true;
   }
 
-  async function publish() {
+  async function saveDraft() {
     if (needAuthGuard()) return;
+
+    if (isNewUnsaved) {
+      setSaving(true);
+      setToast(null);
+      try {
+        const payload = {
+          title: safeTrimOrNull(title) ?? "",
+          description: safeTrimOrNull(description),
+          body: body ?? "",
+          status: "DRAFT" as ChapterStatus,
+        };
+
+        const cid = await createOnServer(payload);
+        if (!cid) return;
+
+        setToastAuto({ kind: "ok", msg: "Capítulo salvo (criado)." });
+
+        setIsNewUnsaved(false);
+        setOpenChapterId(cid);
+        setSelectedChapterId(cid);
+
+        snapshotRef.current = normSnap({
+          title: normTitle(title),
+          description: normDesc(description),
+          body: normText(body),
+          status: "DRAFT",
+        });
+
+        await loadList();
+        await loadDetail(cid);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (!openChapterId) return;
 
     setSaving(true);
     setToast(null);
-
     try {
-      const payload = {
-        title: safeTrimOrNull(title) ?? "",
-        description: safeTrimOrNull(description),
-        body: body ?? "",
-        status: "PUBLIC",
-      };
+      const ok = await saveExistingViaPut(openChapterId, status);
+      if (!ok) return;
 
-      const result = await tryMany<any>([
-        () =>
-          apiRequest<any>(`/api/chapter/${openChapterId}`, {
-            method: "PUT",
-            body: JSON.stringify(payload),
-          }),
-        () =>
-          apiRequest<any>(`/api/chapters/${openChapterId}`, {
-            method: "PUT",
-            body: JSON.stringify(payload),
-          }),
-      ]);
-
-      setApiInfo("PUBLISH", result.usedPath || "—", result.attempts);
-
-      if (!result.ok) {
-        const hint =
-          result.status === 401 ? "401 (token expirado)." : result.status === 404 ? "404 (rota não existe)." : `HTTP ${result.status || "erro"}`;
-        setToastAuto({ kind: "err", msg: `Falha ao publicar (${hint}).` });
-        return;
-      }
-
-      setStatus("PUBLIC");
-
-      snapshotRef.current = normSnap({
-        title: normTitle(title),
-        description: normDesc(description),
-        body: normText(body),
-        status: "PUBLIC",
-      });
-
-      setToastAuto({ kind: "ok", msg: "Publicado." });
       await loadList();
       await loadDetail(openChapterId);
     } finally {
@@ -779,54 +906,235 @@ export default function ChaptersPage() {
     }
   }
 
-  function clearSelection() {
-    if (!confirmIfDirty("Fechar editor")) return;
+  async function publishExisting(chapterId: number) {
+    const result = await tryMany<any>([
+      () => apiRequest<any>(`/api/chapters/${chapterId}/publish`, { method: "POST" }),
+    ]);
 
-    setSelectedChapterId(null);
-    setOpenChapterId(null);
-    setTitle("");
-    setDescription("");
-    setBody("");
-    setStatus("DRAFT");
-    setVersionLabel("v1");
-    setCreatedAt("—");
-    setUpdatedAt("—");
-    setPublishedAt("—");
-    snapshotRef.current = null;
-    didFocusTitle.current = false;
-    didFocusDesc.current = false;
-  }
+    setApiInfo("PUBLISH", result.usedPath || "—", result.attempts);
 
-  const filteredItems = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-
-    let list = items.slice();
-
-    if (statusFilter !== "ALL") {
-      list = list.filter((c) => c.status === statusFilter);
+    if (!result.ok) {
+      const hint =
+        result.status === 401 ? "401 (token expirado)." : result.status === 404 ? "404 (rota não existe)." : `HTTP ${result.status || "erro"}`;
+      setToastAuto({ kind: "err", msg: `Falha ao publicar (${hint}).` });
+      return false;
     }
 
-    if (needle) {
-      list = list.filter((c) => {
-        const t = String(c.title ?? "").toLowerCase();
-        const d = String(c.description ?? "").toLowerCase();
-        return t.includes(needle) || d.includes(needle);
-      });
-    }
+    setStatus("PUBLIC");
 
-    list.sort((a, b) => {
-      const da = new Date(a.updated_at || a.created_at || 0).getTime();
-      const db = new Date(b.updated_at || b.created_at || 0).getTime();
-      return sortKey === "RECENT" ? db - da : da - db;
+    snapshotRef.current = normSnap({
+      title: normTitle(title),
+      description: normDesc(description),
+      body: normText(body),
+      status: "PUBLIC",
     });
 
-    return list;
-  }, [items, q, statusFilter, sortKey]);
+    setToastAuto({ kind: "ok", msg: "Publicado." });
+    return true;
+  }
 
-  const selectedTitlePreview = useMemo(() => {
-    const found = items.find((x) => x.chapter_id === openChapterId);
-    return found?.title?.trim() ? found.title : "capítulo";
-  }, [items, openChapterId]);
+  async function unpublishExisting(chapterId: number) {
+    const result = await tryMany<any>([
+      () => apiRequest<any>(`/api/chapters/${chapterId}/unpublish`, { method: "POST" }),
+    ]);
+
+    setApiInfo("UNPUBLISH", result.usedPath || "—", result.attempts);
+
+    if (!result.ok) {
+      const hint =
+        result.status === 401 ? "401 (token expirado)." : result.status === 404 ? "404 (rota não existe)." : `HTTP ${result.status || "erro"}`;
+      setToastAuto({ kind: "err", msg: `Falha ao despublicar (${hint}).` });
+      return false;
+    }
+
+    setStatus("DRAFT");
+
+    snapshotRef.current = normSnap({
+      title: normTitle(title),
+      description: normDesc(description),
+      body: normText(body),
+      status: "DRAFT",
+    });
+
+    setToastAuto({ kind: "ok", msg: "Despublicado (voltou para rascunho)." });
+    return true;
+  }
+
+  async function publish() {
+    if (needAuthGuard()) return;
+
+    if (!isNewUnsaved && status === "PUBLIC" && !isDirty) {
+      setToastAuto({ kind: "warn", msg: "Este capítulo já está publicado." });
+      return;
+    }
+
+    if (isNewUnsaved) {
+      setSaving(true);
+      setToast(null);
+      try {
+        const payload = {
+          title: safeTrimOrNull(title) ?? "",
+          description: safeTrimOrNull(description),
+          body: body ?? "",
+          status: "PUBLIC" as ChapterStatus,
+        };
+
+        const cid = await createOnServer(payload);
+        if (!cid) return;
+
+        setToastAuto({ kind: "ok", msg: "Publicado." });
+
+        setIsNewUnsaved(false);
+        setOpenChapterId(cid);
+        setSelectedChapterId(cid);
+
+        setStatus("PUBLIC");
+        snapshotRef.current = normSnap({
+          title: normTitle(title),
+          description: normDesc(description),
+          body: normText(body),
+          status: "PUBLIC",
+        });
+
+        await loadList();
+        await loadDetail(cid);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    if (!openChapterId) return;
+
+    setSaving(true);
+    setToast(null);
+    try {
+      if (isDirty) {
+        const okSave = await saveExistingViaPut(openChapterId, "PUBLIC");
+        if (!okSave) return;
+      }
+
+      const okPub = await publishExisting(openChapterId);
+      if (!okPub) return;
+
+      await loadList();
+      await loadDetail(openChapterId);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function unpublish() {
+    if (status !== "PUBLIC") {
+      setToastAuto({ kind: "warn", msg: "Este capítulo já está em rascunho." });
+      return;
+    }
+    if (isNewUnsaved || !openChapterId) {
+      setToastAuto({ kind: "warn", msg: "Este capítulo ainda não existe no banco." });
+      return;
+    }
+
+    setSaving(true);
+    setToast(null);
+    try {
+      const ok = await unpublishExisting(openChapterId);
+      if (!ok) return;
+
+      await loadList();
+      await loadDetail(openChapterId);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ============================
+  // ✅ Move A: picker + link/unlink
+  // ============================
+  async function openPicker() {
+    if (isNewUnsaved || !openChapterId) {
+      setToastAuto({ kind: "warn", msg: "Salve/crie o capítulo primeiro para vincular memórias." });
+      return;
+    }
+
+    setPickerOpen(true);
+    setPickerQ("");
+    setPickerLoading(true);
+
+    try {
+      // Usa o alias /api/memories (backend já tem)
+      const result = await tryMany<ApiMemoriesAliasResponse | any>([
+        () => apiRequest<any>(`/api/memories`, { method: "GET" }),
+      ]);
+
+      setApiInfo("PICKER_MEMORIES", result.usedPath || "—", result.attempts);
+
+      if (!result.ok || !result.data) {
+        setToastAuto({ kind: "warn", msg: "Não consegui carregar o inventário de memórias." });
+        setPickerItems([]);
+        return;
+      }
+
+      const rawList = Array.isArray((result.data as any).memories) ? (result.data as any).memories : [];
+      const normalized: ChapterMemoryItem[] = rawList
+        .map((m: any) => ({
+          memory_id: Number(m.memory_id ?? m.id),
+          title: m.title ?? null,
+          content: m.content ?? null,
+          created_at: m.created_at ?? null,
+          life_phase: m.life_phase ?? m?.meta?.life_phase ?? null,
+          phase_name: m.phase_name ?? m?.meta?.phase_name ?? null,
+        }))
+        .filter((x) => Number.isFinite(x.memory_id) && x.memory_id > 0);
+
+      setPickerItems(normalized);
+    } finally {
+      setPickerLoading(false);
+    }
+  }
+
+  async function linkMemory(memoryId: number) {
+    if (!openChapterId) return;
+    setSaving(true);
+    try {
+      const result = await tryMany<any>([
+        () => apiRequest<any>(`/api/chapters/${openChapterId}/memories/${memoryId}`, { method: "POST" }),
+      ]);
+
+      setApiInfo("LINK_MEMORY", result.usedPath || "—", result.attempts);
+
+      if (!result.ok) {
+        setToastAuto({ kind: "err", msg: "Falha ao vincular memória ao capítulo." });
+        return;
+      }
+
+      setToastAuto({ kind: "ok", msg: "Memória vinculada." });
+      await loadChapterMemories(openChapterId);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function unlinkMemory(memoryId: number) {
+    if (!openChapterId) return;
+    setSaving(true);
+    try {
+      const result = await tryMany<any>([
+        () => apiRequest<any>(`/api/chapters/${openChapterId}/memories/${memoryId}`, { method: "DELETE" }),
+      ]);
+
+      setApiInfo("UNLINK_MEMORY", result.usedPath || "—", result.attempts);
+
+      if (!result.ok) {
+        setToastAuto({ kind: "err", msg: "Falha ao remover vínculo da memória." });
+        return;
+      }
+
+      setToastAuto({ kind: "ok", msg: "Vínculo removido." });
+      await loadChapterMemories(openChapterId);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (!canUseApi) {
@@ -837,505 +1145,1032 @@ export default function ChaptersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canUseApi]);
 
-  const totalCount = items.length;
-  const filteredCount = filteredItems.length;
+  const viewItems = useMemo(() => {
+    let list = items.slice();
 
-  return (
-    <div style={{ padding: 0, color: "var(--hdud-text)" }}>
-      <div style={styles.pageWrap}>
-        {/* =========================
-            HEADER (estilo Memórias)
-           ========================= */}
-        <div className="hdud-card" style={styles.headerCard}>
-          <div style={styles.headerTopRow}>
-            <div>
-              <div style={styles.h1}>Capítulos</div>
-              <div style={styles.hSub}>
-                Organize sua história em fases. Crie, refine e publique quando quiser. <b>Memórias/Timeline</b> continuam no core.
+    const needle = q.trim().toLowerCase();
+    if (needle) {
+      list = list.filter((c) => {
+        const t = String(c.title ?? "").toLowerCase();
+        const d = String(c.description ?? "").toLowerCase();
+        return t.includes(needle) || d.includes(needle) || String(c.chapter_id).includes(needle);
+      });
+    }
+
+    if (statusFilter !== "ALL") list = list.filter((c) => c.status === statusFilter);
+
+    if (sortKey === "TITLE") {
+      list.sort((a, b) => String(a.title ?? "").localeCompare(String(b.title ?? ""), "pt-BR", { sensitivity: "base" }));
+    } else {
+      list.sort((a, b) => {
+        const da = new Date(a.updated_at || a.created_at || 0).getTime();
+        const db = new Date(b.updated_at || b.created_at || 0).getTime();
+        return sortKey === "RECENT" ? db - da : da - db;
+      });
+    }
+
+    return list;
+  }, [items, q, statusFilter, sortKey]);
+
+  const countLabel = useMemo(() => {
+    const filtered = q.trim().length > 0 || statusFilter !== "ALL" || sortKey !== "RECENT";
+    return filtered ? `${viewItems.length}/${items.length} capítulo(s)` : `${items.length} capítulo(s)`;
+  }, [items.length, viewItems.length, q, statusFilter, sortKey]);
+
+  const latestChapter = useMemo(() => {
+    if (items.length === 0) return null;
+    const sorted = items
+      .slice()
+      .sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime());
+    return sorted[0] ?? null;
+  }, [items]);
+
+  const pulseLabel = useMemo(() => {
+    if (!latestChapter) return "Seu mapa ainda está vazio — comece com o primeiro capítulo.";
+    const at = latestChapter.updated_at || latestChapter.created_at;
+    return `Último capítulo ${daysAgoLabel(at)}.`;
+  }, [latestChapter]);
+
+  const moment = useMemo(() => {
+    const sorted = viewItems
+      .slice()
+      .sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime());
+
+    const destaque = sorted[0] ?? null;
+
+    let revisitar: ApiChapterListItem | null = null;
+    if (sorted.length >= 2) {
+      const oldest = viewItems.slice().sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      const pool = oldest.slice(0, Math.min(6, oldest.length));
+      revisitar = pool[Math.floor(Math.random() * pool.length)] ?? null;
+    }
+
+    return { destaque, revisitar };
+  }, [viewItems]);
+
+  const microcopy = useMemo(() => {
+    const parts: string[] = [];
+    const needle = q.trim();
+    if (needle) parts.push(`busca: “${needle}”`);
+    if (statusFilter !== "ALL") parts.push(statusFilter === "PUBLIC" ? "status: públicos" : "status: rascunhos");
+    if (sortKey === "OLD") parts.push("ordem: mais antigos");
+    if (sortKey === "TITLE") parts.push("ordem: por título");
+
+    if (parts.length === 0) return "Um mapa vivo da sua vida — fases que organizam e dão sentido às memórias.";
+    return `Mostrando ${parts.join(" • ")}.`;
+  }, [q, statusFilter, sortKey]);
+
+  const selectedTitlePreview = useMemo(() => {
+    const found = items.find((x) => x.chapter_id === (openChapterId ?? selectedChapterId ?? -1));
+    return found?.title?.trim() ? found.title : "capítulo";
+  }, [items, openChapterId, selectedChapterId]);
+
+  const pickerViewItems = useMemo(() => {
+    const needle = pickerQ.trim().toLowerCase();
+    if (!needle) return pickerItems;
+
+    return pickerItems.filter((m) => {
+      const t = String(m.title ?? "").toLowerCase();
+      const c = String(m.content ?? "").toLowerCase();
+      return t.includes(needle) || c.includes(needle) || String(m.memory_id).includes(needle);
+    });
+  }, [pickerItems, pickerQ]);
+
+  const linkedIds = useMemo(() => new Set(chapterMemories.map((m) => m.memory_id)), [chapterMemories]);
+
+  const ui = useMemo(() => {
+    const page: React.CSSProperties = { padding: 0, color: "var(--hdud-text)" };
+
+    const container: React.CSSProperties = {
+      width: "100%",
+      maxWidth: 1920,
+      margin: "0 auto",
+      padding: "18px clamp(16px, 2.2vw, 36px)",
+      boxSizing: "border-box",
+      position: "relative",
+    };
+
+    const headerCard: React.CSSProperties = {
+      background: "var(--hdud-card)",
+      borderRadius: 16,
+      padding: 18,
+      boxShadow: "var(--hdud-shadow)",
+      marginBottom: 14,
+      border: "1px solid var(--hdud-border)",
+      position: "relative",
+      overflow: "hidden",
+    };
+
+    const headerGlow: React.CSSProperties = {
+      position: "absolute",
+      inset: -60,
+      background: "radial-gradient(closest-side, rgba(0,0,0,0.06), transparent 60%)",
+      pointerEvents: "none",
+      opacity: 0.55,
+      filter: "blur(2px)",
+      transform: "translate3d(0,0,0)",
+    };
+
+    const h1Row: React.CSSProperties = {
+      display: "flex",
+      alignItems: "flex-end",
+      justifyContent: "space-between",
+      gap: 12,
+      flexWrap: "wrap",
+      position: "relative",
+      zIndex: 1,
+    };
+
+    const h1: React.CSSProperties = {
+      fontSize: 40,
+      fontWeight: 950,
+      letterSpacing: -0.7,
+      margin: 0,
+      lineHeight: 1.0,
+    };
+
+    const subtitle: React.CSSProperties = {
+      marginTop: 8,
+      opacity: 0.82,
+      fontWeight: 750,
+      position: "relative",
+      zIndex: 1,
+    };
+
+    const toolbarRow: React.CSSProperties = {
+      display: "flex",
+      gap: 10,
+      alignItems: "center",
+      flexWrap: "wrap",
+      marginTop: 14,
+      position: "relative",
+      zIndex: 1,
+    };
+
+    const spacer: React.CSSProperties = { flex: "1 1 auto" };
+
+    const card: React.CSSProperties = {
+      background: "var(--hdud-card)",
+      borderRadius: 16,
+      padding: 14,
+      boxShadow: "var(--hdud-shadow)",
+      border: "1px solid var(--hdud-border)",
+      marginBottom: 14,
+    };
+
+    const cardTitle: React.CSSProperties = {
+      fontSize: 13,
+      fontWeight: 950,
+      marginBottom: 10,
+      letterSpacing: 0.2,
+      opacity: 0.9,
+      textTransform: "uppercase",
+    };
+
+    const label: React.CSSProperties = {
+      fontSize: 12,
+      fontWeight: 900,
+      opacity: 0.85,
+      marginBottom: 6,
+    };
+
+    const input: React.CSSProperties = {
+      width: "100%",
+      padding: "10px 12px",
+      borderRadius: 12,
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-surface)",
+      color: "var(--hdud-text)",
+      outline: "none",
+    };
+
+    const textarea: React.CSSProperties = {
+      width: "100%",
+      minHeight: 140,
+      padding: "10px 12px",
+      borderRadius: 12,
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-surface)",
+      color: "var(--hdud-text)",
+      outline: "none",
+      resize: "vertical",
+      fontFamily: "inherit",
+      lineHeight: 1.35,
+    };
+
+    const select: React.CSSProperties = {
+      padding: "9px 12px",
+      borderRadius: 12,
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-surface)",
+      color: "var(--hdud-text)",
+      outline: "none",
+      fontWeight: 800,
+    };
+
+    const btn: React.CSSProperties = {
+      padding: "9px 14px",
+      borderRadius: 12,
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-surface)",
+      color: "var(--hdud-text)",
+      cursor: "pointer",
+      fontWeight: 900,
+      whiteSpace: "nowrap",
+      boxShadow: "var(--hdud-shadow-soft)",
+      transition: "transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease",
+      opacity: 1,
+    };
+
+    const btnDisabled: React.CSSProperties = {
+      opacity: 0.55,
+      cursor: "not-allowed",
+    };
+
+    const btnPrimary: React.CSSProperties = {
+      ...btn,
+      background: "var(--hdud-primary)",
+      borderColor: "var(--hdud-primary)",
+      color: "var(--hdud-primary-contrast)",
+    };
+
+    const btnGhost: React.CSSProperties = { ...btn, background: "transparent" };
+
+    const pill: React.CSSProperties = {
+      border: "1px solid var(--hdud-border)",
+      padding: "5px 10px",
+      borderRadius: 999,
+      fontSize: 12,
+      opacity: 0.9,
+      whiteSpace: "nowrap",
+      background: "var(--hdud-surface-2)",
+      fontWeight: 900,
+    };
+
+    const grid2: React.CSSProperties = {
+      display: "grid",
+      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+      gap: 10,
+    };
+
+    const momentCard: React.CSSProperties = {
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-surface)",
+      borderRadius: 14,
+      padding: 14,
+      boxShadow: "var(--hdud-shadow-soft)",
+      cursor: "pointer",
+      transition: "transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease",
+      position: "relative",
+    };
+
+    const momentTitle: React.CSSProperties = { fontWeight: 950, margin: 0, fontSize: 14, letterSpacing: -0.2 };
+
+    const momentMeta: React.CSSProperties = {
+      marginTop: 6,
+      opacity: 0.78,
+      fontSize: 12,
+      fontWeight: 800,
+      lineHeight: 1.25,
+      display: "-webkit-box",
+      WebkitLineClamp: 2,
+      WebkitBoxOrient: "vertical",
+      overflow: "hidden",
+    };
+
+    const listWrap: React.CSSProperties = { display: "grid", gap: 10, marginTop: 10 };
+
+    const row: React.CSSProperties = {
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-surface)",
+      borderRadius: 14,
+      padding: 12,
+      cursor: "pointer",
+      boxShadow: "var(--hdud-shadow-soft)",
+      transition: "transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease",
+      transform: "translate3d(0,0,0)",
+      userSelect: "none",
+      position: "relative",
+      outline: "none",
+    };
+
+    const rowHover: React.CSSProperties = {
+      transform: "translate3d(0,-2px,0)",
+      boxShadow: "var(--hdud-shadow)",
+      borderColor: "rgba(0,0,0,0.12)",
+    };
+
+    const rowSelected: React.CSSProperties = {
+      borderColor: "rgba(0,0,0,0.18)",
+      boxShadow: "0 0 0 3px rgba(0,0,0,0.06), var(--hdud-shadow)",
+      background: "linear-gradient(180deg, rgba(0,0,0,0.015), rgba(0,0,0,0.0))",
+    };
+
+    const selectedBar: React.CSSProperties = {
+      position: "absolute",
+      left: 0,
+      top: 10,
+      bottom: 10,
+      width: 4,
+      borderRadius: 999,
+      background: "var(--hdud-primary)",
+      opacity: 0.9,
+      boxShadow: "0 6px 18px rgba(0,0,0,0.10)",
+    };
+
+    const rowTop: React.CSSProperties = {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 12,
+      alignItems: "baseline",
+    };
+
+    const rowTitle: React.CSSProperties = { fontWeight: 950, fontSize: 14, margin: 0, letterSpacing: -0.2 };
+
+    const rowMeta: React.CSSProperties = { opacity: 0.75, fontSize: 12, whiteSpace: "nowrap", fontWeight: 800 };
+
+    const rowSub: React.CSSProperties = {
+      opacity: 0.82,
+      fontSize: 12,
+      marginTop: 8,
+      lineHeight: 1.35,
+      display: "-webkit-box",
+      WebkitLineClamp: 2,
+      WebkitBoxOrient: "vertical",
+      overflow: "hidden",
+    };
+
+    const empty: React.CSSProperties = {
+      border: "1px dashed var(--hdud-border)",
+      background: "var(--hdud-surface)",
+      borderRadius: 14,
+      padding: 16,
+      opacity: 0.9,
+    };
+
+    const emptyTitle: React.CSSProperties = { margin: 0, fontWeight: 950, letterSpacing: -0.2 };
+
+    const emptyText: React.CSSProperties = { marginTop: 6, opacity: 0.82, fontWeight: 750, lineHeight: 1.35 };
+
+    // ✅ modal simples (picker)
+    const overlay: React.CSSProperties = {
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,0.45)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 16,
+      zIndex: 999,
+    };
+
+    const modal: React.CSSProperties = {
+      width: "min(920px, 96vw)",
+      maxHeight: "min(78vh, 720px)",
+      overflow: "hidden",
+      borderRadius: 16,
+      border: "1px solid var(--hdud-border)",
+      background: "var(--hdud-card)",
+      boxShadow: "var(--hdud-shadow)",
+      display: "flex",
+      flexDirection: "column",
+    };
+
+    const modalHead: React.CSSProperties = {
+      padding: 14,
+      borderBottom: "1px solid var(--hdud-border)",
+      display: "flex",
+      gap: 10,
+      alignItems: "center",
+      justifyContent: "space-between",
+    };
+
+    const modalBody: React.CSSProperties = {
+      padding: 14,
+      overflow: "auto",
+    };
+
+    return {
+      page,
+      container,
+      headerCard,
+      headerGlow,
+      h1Row,
+      h1,
+      subtitle,
+      toolbarRow,
+      spacer,
+      card,
+      cardTitle,
+      label,
+      input,
+      textarea,
+      select,
+      btn,
+      btnPrimary,
+      btnGhost,
+      btnDisabled,
+      pill,
+      grid2,
+      momentCard,
+      momentTitle,
+      momentMeta,
+      listWrap,
+      row,
+      rowHover,
+      rowSelected,
+      selectedBar,
+      rowTop,
+      rowTitle,
+      rowMeta,
+      rowSub,
+      empty,
+      emptyTitle,
+      emptyText,
+      overlay,
+      modal,
+      modalHead,
+      modalBody,
+    };
+  }, []);
+
+  const headerFilters = (
+    <div style={ui.toolbarRow}>
+      <button type="button" style={ui.btnPrimary} onClick={() => openLocalNewDraft()} disabled={loading || saving} title="Criar um novo capítulo (rascunho local)">
+        + Criar capítulo
+      </button>
+
+      <div style={ui.spacer} />
+
+      <input style={{ ...ui.input, width: 280 }} placeholder="Buscar (título, descrição ou #ID)…" value={q} onChange={(e) => setQ(e.target.value)} />
+
+      <select style={ui.select} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)}>
+        <option value="ALL">Status: Todos</option>
+        <option value="DRAFT">Status: Rascunhos</option>
+        <option value="PUBLIC">Status: Públicos</option>
+      </select>
+
+      <select style={ui.select} value={sortKey} onChange={(e) => setSortKey(e.target.value as any)}>
+        <option value="RECENT">Mais recentes</option>
+        <option value="OLD">Mais antigos</option>
+        <option value="TITLE">Título</option>
+      </select>
+
+      <button type="button" style={ui.btn} onClick={() => loadList()} disabled={loading || saving}>
+        {loading ? "Atualizando…" : "Atualizar"}
+      </button>
+
+      <button type="button" style={showDiag ? ui.btnPrimary : ui.btn} onClick={() => setShowDiag((v) => !v)} disabled={loading || saving}>
+        Diagnóstico
+      </button>
+    </div>
+  );
+
+  const momentBlock = (
+    <div style={ui.card}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+        <div style={ui.cardTitle}>Momento</div>
+        <div style={{ opacity: 0.75, fontSize: 12, fontWeight: 900 }}>{latestChapter ? `Pulso: ${pulseLabel}` : "Pulso: em silêncio"}</div>
+      </div>
+
+      <div style={ui.grid2}>
+        {moment.destaque ? (
+          <div
+            style={ui.momentCard}
+            onClick={() => {
+              if (!confirmIfDirty("Abrir capítulo (em destaque)")) return;
+              setSelectedChapterId(moment.destaque!.chapter_id);
+              void loadDetail(moment.destaque!.chapter_id);
+            }}
+            onMouseEnter={() => setHoverId(moment.destaque!.chapter_id)}
+            onMouseLeave={() => setHoverId((v) => (v === moment.destaque!.chapter_id ? null : v))}
+            title="Abrir capítulo"
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <div>
+                <div style={{ opacity: 0.8, fontSize: 12, fontWeight: 900 }}>Em destaque</div>
+                <p style={ui.momentTitle}>{moment.destaque.title?.trim() ? moment.destaque.title : `Capítulo #${moment.destaque.chapter_id}`}</p>
               </div>
-
-              <div style={styles.metaLine}>
-                <span style={styles.metaBadge}>author_id: {authorId ?? "—"}</span>
-                <span style={styles.metaBadge}>{totalCount} item(ns)</span>
-                {statusFilter !== "ALL" ? <span style={styles.metaBadge}>filtro: {statusFilter === "PUBLIC" ? "públicos" : "rascunhos"}</span> : null}
-                {q.trim() ? <span style={styles.metaBadge}>busca: “{compactText(q.trim(), 18)}”</span> : null}
+              <div style={{ opacity: 0.7, fontSize: 12, fontWeight: 900, whiteSpace: "nowrap" }}>
+                {formatDateBRShort(moment.destaque.updated_at || moment.destaque.created_at)}
               </div>
             </div>
-
-            <div style={styles.headerCTACol}>
-              <button className="hdud-btn hdud-btn-primary" onClick={() => createChapter()} disabled={loading || saving} style={styles.ctaBtn}>
-                + Criar capítulo
-              </button>
-            </div>
+            <div style={ui.momentMeta}>{moment.destaque.description ? moment.destaque.description : "Abra e descreva a fase com 1–2 frases."}</div>
           </div>
-
-          <div style={styles.headerControlsRow}>
-            <input
-              className="hdud-input"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Buscar (título ou descrição)..."
-              style={styles.searchInput}
-            />
-
-            <select className="hdud-input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} style={styles.select}>
-              <option value="ALL">Status: Todos</option>
-              <option value="DRAFT">Status: Rascunhos</option>
-              <option value="PUBLIC">Status: Públicos</option>
-            </select>
-
-            <select className="hdud-input" value={sortKey} onChange={(e) => setSortKey(e.target.value as any)} style={styles.select}>
-              <option value="RECENT">Mais recentes</option>
-              <option value="OLD">Mais antigos</option>
-            </select>
-
-            <div style={{ flex: 1 }} />
-
-            <button className="hdud-btn" onClick={() => loadList()} disabled={loading || saving}>
-              {loading ? "Atualizando..." : "Atualizar"}
-            </button>
-
-            <button className="hdud-btn" onClick={() => setShowDiag((v) => !v)} disabled={loading || saving}>
-              {showDiag ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
-            </button>
+        ) : (
+          <div style={ui.empty}>
+            <p style={ui.emptyTitle}>Seu mapa começa aqui.</p>
+            <div style={ui.emptyText}>Crie o primeiro capítulo e dê estrutura às suas memórias.</div>
           </div>
+        )}
 
-          {toast && (
-            <div
-              style={{
-                marginTop: 12,
-                padding: 10,
-                borderRadius: 10,
-                border: "1px solid var(--hdud-border)",
-                background:
-                  toast.kind === "ok" ? "rgba(52, 199, 89, 0.10)" : toast.kind === "warn" ? "rgba(255, 204, 0, 0.10)" : "rgba(255, 59, 48, 0.10)",
-              }}
-            >
-              <b style={{ textTransform: "uppercase", fontSize: 11, opacity: 0.8 }}>{toast.kind}</b> — {toast.msg}
+        {moment.revisitar ? (
+          <div
+            style={ui.momentCard}
+            onClick={() => {
+              if (!confirmIfDirty("Abrir capítulo (revisitar)")) return;
+              setSelectedChapterId(moment.revisitar!.chapter_id);
+              void loadDetail(moment.revisitar!.chapter_id);
+            }}
+            onMouseEnter={() => setHoverId(moment.revisitar!.chapter_id)}
+            onMouseLeave={() => setHoverId((v) => (v === moment.revisitar!.chapter_id ? null : v))}
+            title="Abrir capítulo"
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <div>
+                <div style={{ opacity: 0.8, fontSize: 12, fontWeight: 900 }}>Revisitar</div>
+                <p style={ui.momentTitle}>{moment.revisitar.title?.trim() ? moment.revisitar.title : `Capítulo #${moment.revisitar.chapter_id}`}</p>
+              </div>
+              <div style={{ opacity: 0.7, fontSize: 12, fontWeight: 900, whiteSpace: "nowrap" }}>{formatDateBRShort(moment.revisitar.created_at)}</div>
             </div>
-          )}
+            <div style={ui.momentMeta}>{moment.revisitar.description ? moment.revisitar.description : "Volte aqui e refine — capítulos ficam melhores com revisita."}</div>
+          </div>
+        ) : (
+          <div style={ui.empty}>
+            <p style={ui.emptyTitle}>Sem revisitas ainda.</p>
+            <div style={ui.emptyText}>Quando você tiver mais capítulos, eu trago um antigo de forma orgânica.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
-          {showDiag && (
-            <div style={styles.diagBox}>
-              <div style={{ fontWeight: 900, marginBottom: 6 }}>Diagnóstico</div>
-              <div style={styles.diagLine}>token: {token ? "OK" : "—"}</div>
-              <div style={styles.diagLine}>authorId (JWT): {authorId ?? "—"}</div>
-              <div style={styles.diagLine}>API: {lastApiInfo || "—"}</div>
-              <div style={styles.diagLine}>isDirty: {String(isDirty)}</div>
-              <div style={styles.diagLine}>dirtyInfo: {dirtyInfo}</div>
-            </div>
-          )}
+  const publishDisabledBecauseAlreadyPublic = !isNewUnsaved && status === "PUBLIC" && !isDirty;
+  const canUnpublish = !isNewUnsaved && !!openChapterId && status === "PUBLIC";
+
+  const publishBtnLabel =
+    isNewUnsaved ? "Publicar" : status === "PUBLIC" ? (isDirty ? "Atualizar publicação" : "Publicado") : "Publicar";
+
+  const editorMemoriesBlock = (
+    <div style={ui.card}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={ui.cardTitle}>Memórias deste capítulo</div>
+          <div style={{ opacity: 0.75, fontSize: 12, fontWeight: 800 }}>
+            {isNewUnsaved || !openChapterId
+              ? "Salve/crie o capítulo para começar a vincular memórias."
+              : "Vínculos rápidos (sem mexer no core de versionamento)."}
+          </div>
         </div>
 
-        {/* =========================
-            HISTÓRICO (estilo Memórias)
-           ========================= */}
-        <div className="hdud-card" style={{ marginTop: 18 }}>
-          <div style={styles.historyHeader}>
-            <div style={styles.historyTitle}>Histórico</div>
-            <div style={styles.historyRight}>
-              <span style={styles.historyPill}>{filteredCount} item(ns)</span>
-            </div>
-          </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={ui.pill}>{loadingMemories ? "carregando…" : `${chapterMemories.length} vínculo(s)`}</div>
+          <button
+            type="button"
+            style={isNewUnsaved || !openChapterId ? { ...ui.btn, ...ui.btnDisabled } : ui.btnPrimary}
+            disabled={saving || loading || isNewUnsaved || !openChapterId}
+            onClick={openPicker}
+            title={isNewUnsaved ? "Crie o capítulo primeiro" : "Vincular uma memória existente"}
+          >
+            + Vincular memória
+          </button>
+          <button
+            type="button"
+            style={isNewUnsaved || !openChapterId ? { ...ui.btn, ...ui.btnDisabled } : ui.btn}
+            disabled={saving || loading || isNewUnsaved || !openChapterId}
+            onClick={() => openChapterId && loadChapterMemories(openChapterId)}
+          >
+            Atualizar
+          </button>
+        </div>
+      </div>
 
-          <div style={styles.historyBodyGrid}>
-            {/* LEFT LIST */}
-            <div style={styles.leftCol}>
-              <div style={styles.leftList}>
-                {filteredItems.map((c) => {
-                  const isSel = c.chapter_id === selectedChapterId;
-                  const statusLabel = c.status === "PUBLIC" ? "Público" : "Rascunho";
-
-                  return (
-                    <div
-                      key={c.chapter_id}
-                      style={{
-                        ...styles.itemCard,
-                        outline: isSel ? "2px solid rgba(0,0,0,0.12)" : "none",
-                        background: isSel ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.02)",
-                      }}
-                      onClick={() => {
-                        if (isSel) return;
-                        // clique no card só seleciona (não abre editor)
-                        if (openChapterId && isDirty && !confirmIfDirty("Selecionar capítulo (sem abrir editor)")) return;
-                        setSelectedChapterId(c.chapter_id);
-                      }}
-                      role="button"
-                    >
-                      <div style={styles.itemTopRow}>
-                        <div style={styles.itemTitle}>
-                          {c.title || `Capítulo #${c.chapter_id}`}{" "}
-                          <span style={{ opacity: 0.7, fontWeight: 800, fontSize: 12 }}>#{c.chapter_id}</span>
-                        </div>
-
-                        <span style={styles.statusPill}>{statusLabel}</span>
-                      </div>
-
-                      {c.description ? <div style={styles.itemDesc}>{compactText(String(c.description), 110)}</div> : null}
-
-                      <div style={styles.itemMeta}>
-                        <span>{formatDateBR(c.updated_at)}</span>
-                        <span style={{ opacity: 0.6 }}>•</span>
-                        <span>{c.status === "PUBLIC" ? "publicado" : "editável"}</span>
-                      </div>
-
-                      <div style={styles.itemActions}>
-                        <button
-                          className="hdud-btn"
-                          style={{ padding: "6px 10px" }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (!confirmIfDirty("Abrir capítulo para editar")) return;
-                            void loadDetail(c.chapter_id);
-                          }}
-                        >
-                          Abrir
-                        </button>
-                      </div>
+      {isNewUnsaved || !openChapterId ? (
+        <div style={{ marginTop: 12, opacity: 0.78, fontSize: 12, fontWeight: 800 }}>
+          Dica: **Capítulo é o mapa**, Memória é o evento. Salve o capítulo e depois comece a pendurar memórias nele.
+        </div>
+      ) : loadingMemories ? (
+        <div style={{ marginTop: 12, opacity: 0.85, fontWeight: 900 }}>Carregando vínculos…</div>
+      ) : chapterMemories.length === 0 ? (
+        <div style={{ marginTop: 12, ...ui.empty }}>
+          <p style={ui.emptyTitle}>Nenhuma memória vinculada ainda.</p>
+          <div style={ui.emptyText}>Clique em “Vincular memória” e comece a construir a narrativa desse capítulo.</div>
+        </div>
+      ) : (
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          {chapterMemories.map((m) => {
+            const titleText = (m.title && String(m.title).trim()) || `Memória #${m.memory_id}`;
+            const when = formatDateBR(m.created_at || null);
+            const phaseLabel = (m.phase_name || m.life_phase || "").toString().trim();
+            return (
+              <div
+                key={m.memory_id}
+                style={{
+                  border: "1px solid var(--hdud-border)",
+                  background: "var(--hdud-surface)",
+                  borderRadius: 14,
+                  padding: 12,
+                  boxShadow: "var(--hdud-shadow-soft)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                    <div style={{ fontWeight: 950, letterSpacing: -0.2 }}>{titleText}</div>
+                    <div style={{ opacity: 0.72, fontSize: 12, fontWeight: 900 }}>
+                      #{m.memory_id}
+                      {m.version_number != null ? ` • v${m.version_number}` : ""}
+                      {phaseLabel ? ` • ${phaseLabel}` : ""}
                     </div>
-                  );
-                })}
-
-                {!filteredItems.length ? (
-                  <div style={styles.emptyList}>
-                    <div style={{ fontWeight: 900 }}>Nada encontrado</div>
-                    <div style={{ opacity: 0.75, marginTop: 6 }}>Tente limpar filtros ou criar um capítulo novo.</div>
                   </div>
-                ) : null}
+                  <div style={{ opacity: 0.72, fontSize: 12, fontWeight: 900, whiteSpace: "nowrap" }}>{when}</div>
+                </div>
+
+                <div style={{ marginTop: 8, opacity: 0.82, fontSize: 12, lineHeight: 1.35, fontWeight: 750 }}>
+                  {safeText(m.content, 240)}
+                </div>
+
+                <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                  <button
+                    type="button"
+                    style={ui.btn}
+                    onClick={() => unlinkMemory(m.memory_id)}
+                    disabled={saving || loading}
+                    title="Remover vínculo desta memória"
+                  >
+                    Remover vínculo
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
+  const editorCard = (
+    <div style={ui.card}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={ui.cardTitle}>Editor do capítulo</div>
+          <div style={{ opacity: 0.75, fontSize: 12, fontWeight: 800 }}>
+            {isNewUnsaved ? "Rascunho local — só cria no banco ao Salvar/Publicar." : "Alterações geram versão e preservam histórico."}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={ui.pill}>{isNewUnsaved ? "SEM ID" : `ID ${openChapterId ?? "—"}`}</div>
+          <div style={ui.pill}>{versionLabel}</div>
+          <div style={ui.pill}>{status === "PUBLIC" ? "Público" : "Rascunho"}</div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10, opacity: 0.75, fontSize: 12, fontWeight: 800 }}>
+        Criado: {createdAt} • Última atualização: {updatedAt} • Publicado: {publishedAt}
+      </div>
+
+      {toast ? (
+        <div
+          style={{
+            marginTop: 12,
+            padding: 10,
+            borderRadius: 12,
+            border: "1px solid var(--hdud-border)",
+            background:
+              toast.kind === "ok"
+                ? "rgba(52, 199, 89, 0.10)"
+                : toast.kind === "warn"
+                ? "rgba(255, 204, 0, 0.10)"
+                : "rgba(255, 59, 48, 0.10)",
+          }}
+        >
+          <b style={{ textTransform: "uppercase", fontSize: 11, opacity: 0.8 }}>{toast.kind}</b> — {toast.msg}
+        </div>
+      ) : null}
+
+      {showDiag ? (
+        <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: "1px solid var(--hdud-border)", background: "rgba(255,255,255,0.02)" }}>
+          <div style={{ fontWeight: 950, marginBottom: 6 }}>Diagnóstico</div>
+          <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>token: {token ? "OK" : "—"}</div>
+          <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>authorId (JWT): {authorId ?? "—"}</div>
+          <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>API: {lastApiInfo || "—"}</div>
+          <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>isDirty: {String(isDirty)}</div>
+          <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>dirtyInfo: {dirtyInfo}</div>
+          <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>isNewUnsaved: {String(isNewUnsaved)}</div>
+        </div>
+      ) : null}
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+        <button type="button" style={ui.btnPrimary} onClick={saveDraft} disabled={loading || saving}>
+          {saving ? "Salvando…" : "Salvar"}
+        </button>
+
+        <button
+          type="button"
+          style={{ ...(ui.btn as any), ...(publishDisabledBecauseAlreadyPublic ? ui.btnDisabled : null) }}
+          onClick={publish}
+          disabled={loading || saving || publishDisabledBecauseAlreadyPublic}
+          title={
+            publishDisabledBecauseAlreadyPublic
+              ? "Já está publicado (sem mudanças). Edite algo para habilitar."
+              : isNewUnsaved
+              ? "Publicar e criar no banco"
+              : "Publicar"
+          }
+        >
+          {publishBtnLabel}
+        </button>
+
+        <button
+          type="button"
+          style={{ ...(ui.btn as any), ...(!canUnpublish ? ui.btnDisabled : null) }}
+          onClick={unpublish}
+          disabled={loading || saving || !canUnpublish}
+          title={isNewUnsaved ? "Crie/publicar primeiro" : status !== "PUBLIC" ? "Somente quando estiver público" : "Voltar para rascunho"}
+        >
+          Despublicar
+        </button>
+
+        <button type="button" style={ui.btn} onClick={reloadSelected} disabled={loading || saving || isNewUnsaved || !openChapterId}>
+          Recarregar
+        </button>
+
+        <div style={{ flex: "1 1 auto" }} />
+
+        <button type="button" style={ui.btnGhost} onClick={goListMode} disabled={loading || saving}>
+          Voltar
+        </button>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div style={ui.label}>Título (livre)</div>
+        <input
+          style={ui.input}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onFocus={() => {
+            if (!didFocusTitle.current) {
+              didFocusTitle.current = true;
+              if (title === DEFAULT_NEW_TITLE) setTitle("");
+            }
+          }}
+          placeholder="Ex.: Minha chegada ao mundo"
+        />
+        <div style={{ fontSize: 11, opacity: 0.7, marginTop: 6, fontWeight: 800 }}>{title.trim().length} / 120</div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div style={ui.label}>Descrição curta (opcional)</div>
+        <textarea
+          style={{ ...ui.textarea, minHeight: 70 }}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          onFocus={() => {
+            if (!didFocusDesc.current) {
+              didFocusDesc.current = true;
+              if (description === DEFAULT_NEW_DESCRIPTION) setDescription("");
+            }
+          }}
+          placeholder="Uma frase curta sobre essa fase"
+        />
+        <div style={{ fontSize: 11, opacity: 0.7, marginTop: 6, fontWeight: 800 }}>{description.trim().length} / 220</div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div style={ui.label}>Texto do capítulo</div>
+        <textarea style={{ ...ui.textarea, minHeight: 240 }} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Escreva com calma. Isso é o mapa da sua vida." />
+        <div style={{ fontSize: 11, opacity: 0.7, marginTop: 6, fontWeight: 800 }}>{body.trim().length} caracteres</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={ui.page}>
+      <div style={ui.container}>
+        <div style={ui.headerCard}>
+          <div style={ui.headerGlow} />
+          <div style={ui.h1Row}>
+            <div>
+              <h1 style={ui.h1}>Capítulos</h1>
+              <div style={ui.subtitle}>
+                {greetingPTBR()}, Alexandre. <span style={{ opacity: 0.82 }}>{pulseLabel}</span>
               </div>
             </div>
+            <div style={ui.pill}>{countLabel}</div>
+          </div>
 
-            {/* RIGHT PANEL */}
-            <div style={styles.rightCol}>
-              {!openChapterId ? (
-                <div style={styles.rightEmpty}>
-                  <div style={styles.rightEmptyKicker}>Sua jornada começa aqui</div>
-                  <div style={styles.rightEmptyTitle}>Escolha uma etapa</div>
-                  <div style={styles.rightEmptyText}>
-                    Clique em um capítulo à esquerda para editar — ou crie uma nova fase com <b>+ Criar capítulo</b>.
-                    <br />
-                    O editor só aparece quando existe um capítulo “em foco”. Isso deixa a tela limpa e com cara de produto.
-                  </div>
+          <div style={{ marginTop: 10, opacity: 0.82, fontWeight: 750, position: "relative", zIndex: 1 }}>{microcopy}</div>
 
-                  <div style={styles.rightEmptyDivider} />
+          {mode === "list" ? headerFilters : null}
+        </div>
 
-                  <div style={styles.rightEmptySectionTitle}>Sugestões rápidas</div>
-                  <div style={styles.rightEmptyText}>Crie uma etapa com um clique (rascunho) para acelerar a demo:</div>
+        {mode === "list" && showDiag ? (
+          <div style={ui.card}>
+            <div style={{ fontWeight: 950, marginBottom: 6 }}>Diagnóstico</div>
+            <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>token: {token ? "OK" : "—"}</div>
+            <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>authorId (JWT): {authorId ?? "—"}</div>
+            <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>API: {lastApiInfo || "—"}</div>
+            <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>mode: {mode}</div>
+            <div style={{ fontSize: 12, opacity: 0.78, marginTop: 6 }}>items: {items.length}</div>
+          </div>
+        ) : null}
 
-                  <div style={styles.quickRow}>
-                    <button
-                      className="hdud-btn"
-                      onClick={() =>
-                        createChapter({
-                          title: "Infância",
-                          description: "As primeiras cenas: casa, pessoas, rotina e o que ficou marcado.",
-                        })
-                      }
-                      disabled={loading || saving}
-                    >
-                      + Infância
-                    </button>
+        {mode === "list" ? (
+          <>
+            {toast ? (
+              <div
+                style={{
+                  marginBottom: 14,
+                  padding: 12,
+                  borderRadius: 14,
+                  border: "1px solid var(--hdud-border)",
+                  background:
+                    toast.kind === "ok"
+                      ? "rgba(52, 199, 89, 0.10)"
+                      : toast.kind === "warn"
+                      ? "rgba(255, 204, 0, 0.10)"
+                      : "rgba(255, 59, 48, 0.10)",
+                  fontWeight: 900,
+                }}
+              >
+                {toast.msg}
+              </div>
+            ) : null}
 
-                    <button
-                      className="hdud-btn"
-                      onClick={() =>
-                        createChapter({
-                          title: "Adolescência",
-                          description: "Amizades, viradas, descobertas, medos e o começo do “eu”.",
-                        })
-                      }
-                      disabled={loading || saving}
-                    >
-                      + Adolescência
-                    </button>
+            {momentBlock}
 
-                    <button
-                      className="hdud-btn"
-                      onClick={() =>
-                        createChapter({
-                          title: "Vida adulta",
-                          description: "Trabalho, escolhas, quedas e construções — o que você virou.",
-                        })
-                      }
-                      disabled={loading || saving}
-                    >
-                      + Vida adulta
-                    </button>
+            <div style={ui.card}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+                <div style={ui.cardTitle}>Histórico</div>
+                <div style={{ opacity: 0.75, fontSize: 12, fontWeight: 900 }}>
+                  Clique para selecionar — <b>duplo clique</b> para editar.
+                </div>
+              </div>
 
-                    <button
-                      className="hdud-btn"
-                      onClick={() =>
-                        createChapter({
-                          title: "Agora",
-                          description: "O presente: o que está acontecendo e para onde você quer ir.",
-                        })
-                      }
-                      disabled={loading || saving}
-                    >
-                      + Agora
-                    </button>
-                  </div>
-
-                  <div style={styles.rightEmptyDivider} />
-
-                  <div style={styles.rightEmptySectionTitle}>Como escrever aqui</div>
-                  <ul style={styles.quickList}>
-                    <li>1–2 frases sobre o cenário (onde/como era a vida).</li>
-                    <li>As pessoas centrais e por quê.</li>
-                    <li>A virada: o antes e o depois.</li>
-                  </ul>
-
-                  <div style={styles.rightEmptyHint}>Dica: você pode criar como rascunho agora e publicar depois — sem pressa.</div>
+              {loading ? (
+                <div style={{ opacity: 0.85, fontWeight: 900 }}>Carregando…</div>
+              ) : viewItems.length === 0 ? (
+                <div style={ui.empty}>
+                  <p style={ui.emptyTitle}>Nada por aqui — por enquanto.</p>
+                  <div style={ui.emptyText}>Tente ajustar os filtros… ou crie um capítulo para começar o mapa.</div>
                 </div>
               ) : (
-                <div style={styles.form}>
-                  <div style={styles.formHeader}>
-                    <div>
-                      <div style={styles.formTitle}>REGISTRAR</div>
-                      <div style={styles.formMeta}>
-                        Criado: {createdAt} • Última atualização: {updatedAt} • Publicado: {publishedAt}
+                <div style={ui.listWrap}>
+                  {viewItems.map((c) => {
+                    const isHover = hoverId === c.chapter_id;
+                    const isSel = selectedChapterId === c.chapter_id;
+                    const statusLabel = c.status === "PUBLIC" ? "público" : "rascunho";
+                    const ver = c.current_version_id ? `v${c.current_version_id}` : "v1";
+                    const when = formatDateBR(c.updated_at || c.created_at);
+
+                    return (
+                      <div
+                        key={c.chapter_id}
+                        style={{
+                          ...ui.row,
+                          ...(isHover ? ui.rowHover : null),
+                          ...(isSel ? ui.rowSelected : null),
+                          paddingLeft: isSel ? 16 : 12,
+                        }}
+                        onMouseEnter={() => setHoverId(c.chapter_id)}
+                        onMouseLeave={() => setHoverId((v) => (v === c.chapter_id ? null : v))}
+                        onClick={() => setSelectedChapterId(c.chapter_id)}
+                        onDoubleClick={() => {
+                          if (!confirmIfDirty("Abrir capítulo para editar")) return;
+                          void loadDetail(c.chapter_id);
+                        }}
+                        title="Duplo clique para editar"
+                      >
+                        {isSel ? <div style={ui.selectedBar} /> : null}
+
+                        <div style={ui.rowTop}>
+                          <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                            <div style={ui.rowTitle}>{c.title?.trim() ? c.title : `Capítulo #${c.chapter_id}`}</div>
+                            <div style={{ opacity: 0.72, fontSize: 12, fontWeight: 900 }}>
+                              #{c.chapter_id} • {ver} • {statusLabel}
+                            </div>
+                          </div>
+                          <div style={ui.rowMeta}>{when}</div>
+                        </div>
+
+                        <div style={ui.rowSub}>{c.description ? c.description : "Adicione uma frase curta descrevendo essa fase."}</div>
                       </div>
-                    </div>
-
-                    <div style={styles.formBadges}>
-                      <span style={styles.badge}>ID {openChapterId ?? "—"}</span>
-                      <span style={styles.badge}>{versionLabel}</span>
-                      <span style={styles.badge}>{status === "PUBLIC" ? "Público" : "Rascunho"}</span>
-                    </div>
-                  </div>
-
-                  <div style={styles.formActions}>
-                    <button className="hdud-btn" onClick={reloadSelected} disabled={loading || saving}>
-                      Recarregar
-                    </button>
-
-                    <button className="hdud-btn hdud-btn-primary" onClick={saveDraft} disabled={loading || saving || !openChapterId}>
-                      {saving ? "Salvando..." : "Salvar"}
-                    </button>
-
-                    <button className="hdud-btn" onClick={publish} disabled={loading || saving || !openChapterId}>
-                      Publicar
-                    </button>
-
-                    <button className="hdud-btn" onClick={clearSelection} disabled={loading || saving}>
-                      Fechar
-                    </button>
-                  </div>
-
-                  <label style={styles.label}>
-                    <span style={styles.labelTop}>Título (livre)</span>
-                    <input
-                      className="hdud-input"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      onFocus={() => {
-                        if (!didFocusTitle.current) {
-                          didFocusTitle.current = true;
-                          if (openChapterId && title === DEFAULT_NEW_TITLE) setTitle("");
-                        }
-                      }}
-                      placeholder="Ex.: Minha chegada ao mundo"
-                    />
-                    <span style={styles.counter}>{title.trim().length} / 120</span>
-                  </label>
-
-                  <label style={styles.label}>
-                    <span style={styles.labelTop}>Descrição curta (opcional)</span>
-                    <textarea
-                      className="hdud-input"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      onFocus={() => {
-                        if (!didFocusDesc.current) {
-                          didFocusDesc.current = true;
-                          if (openChapterId && description === DEFAULT_NEW_DESCRIPTION) setDescription("");
-                        }
-                      }}
-                      placeholder="Uma frase curta sobre essa fase"
-                      style={{ minHeight: 70, resize: "vertical" }}
-                    />
-                    <span style={styles.counter}>{description.trim().length} / 220</span>
-                  </label>
-
-                  <label style={styles.label}>
-                    <span style={styles.labelTop}>Texto do capítulo</span>
-                    <textarea
-                      className="hdud-input"
-                      value={body}
-                      onChange={(e) => setBody(e.target.value)}
-                      placeholder="Escreva com calma. Isso é o mapa da sua vida."
-                      style={{ minHeight: 260, resize: "vertical", fontFamily: "inherit" }}
-                    />
-                    <span style={styles.counter}>{body.trim().length} caracteres</span>
-                  </label>
+                    );
+                  })}
                 </div>
               )}
             </div>
-          </div>
-        </div>
 
-        {/* Guia (mantido) */}
-        <div className="hdud-card" style={{ marginTop: 18 }}>
-          <div style={styles.suggestHeader}>
-            <div style={styles.suggestTitle}>
-              Guia de escrita (opcional) — <b>{selectedTitlePreview}</b>
-            </div>
+            <div style={ui.card}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+                <div style={ui.cardTitle}>Guia de escrita</div>
+                <div style={{ opacity: 0.75, fontSize: 12, fontWeight: 900 }}>
+                  Sugestões rápidas — <b>{selectedTitlePreview}</b>
+                </div>
+              </div>
 
-            <button className="hdud-btn" onClick={() => setShowGuide((v) => !v)} title="Alternar guia de escrita">
-              {showGuide ? "Ocultar" : "Mostrar"}
-            </button>
-          </div>
-
-          {showGuide ? (
-            <>
-              <ul style={styles.suggestList}>
-                <li>Qual cenário define essa fase (casa, cidade, rotina, clima, época)?</li>
-                <li>Quem são as pessoas centrais aqui? O que elas significam para você?</li>
-                <li>Qual foi a virada (o antes e o depois)?</li>
-                <li>Gancho do seu texto: {body ? `${compactText(body, 48)}` : "(ainda vazio)"}</li>
+              <ul style={{ marginTop: 10, marginBottom: 0, paddingLeft: 18, fontSize: 12, opacity: 0.78, lineHeight: 1.6 }}>
+                <li>Qual cenário define essa fase (cidade, rotina, época, clima)?</li>
+                <li>Quem são as pessoas centrais aqui — e por quê?</li>
+                <li>Qual foi a virada (antes/depois)?</li>
               </ul>
-              <div style={styles.suggestHint}>*isso é só guia premium de escrita (determinístico)*</div>
-            </>
-          ) : (
-            <div style={styles.suggestCollapsed}>Três perguntas para destravar a escrita — aberto quando você quiser.</div>
-          )}
-        </div>
+              <div style={{ marginTop: 8, fontSize: 11, opacity: 0.6 }}>*guia premium determinístico*</div>
+            </div>
+          </>
+        ) : null}
+
+        {mode === "edit" ? (
+          <>
+            {editorCard}
+            {editorMemoriesBlock}
+          </>
+        ) : null}
+
+        {/* ✅ Picker modal */}
+        {pickerOpen ? (
+          <div style={ui.overlay} onClick={() => setPickerOpen(false)}>
+            <div style={ui.modal} onClick={(e) => e.stopPropagation()}>
+              <div style={ui.modalHead}>
+                <div>
+                  <div style={{ fontWeight: 950, letterSpacing: -0.2 }}>Vincular memória</div>
+                  <div style={{ opacity: 0.75, fontSize: 12, fontWeight: 800 }}>
+                    Escolha uma memória para anexar a este capítulo.
+                  </div>
+                </div>
+                <button type="button" style={ui.btn} onClick={() => setPickerOpen(false)}>
+                  Fechar
+                </button>
+              </div>
+
+              <div style={ui.modalBody}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    style={{ ...ui.input, maxWidth: 420 }}
+                    placeholder="Buscar por título, conteúdo ou #ID…"
+                    value={pickerQ}
+                    onChange={(e) => setPickerQ(e.target.value)}
+                  />
+                  <div style={ui.pill}>
+                    {pickerLoading ? "carregando…" : `${pickerViewItems.length} resultado(s)`}
+                  </div>
+                </div>
+
+                {pickerLoading ? (
+                  <div style={{ marginTop: 12, opacity: 0.85, fontWeight: 900 }}>Carregando inventário…</div>
+                ) : pickerViewItems.length === 0 ? (
+                  <div style={{ marginTop: 12, ...ui.empty }}>
+                    <p style={ui.emptyTitle}>Nada encontrado.</p>
+                    <div style={ui.emptyText}>Tente outra busca — ou crie uma nova memória em Memórias.</div>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                    {pickerViewItems.map((m) => {
+                      const titleText = (m.title && String(m.title).trim()) || `Memória #${m.memory_id}`;
+                      const when = formatDateBRShort(m.created_at || null);
+                      const phaseLabel = (m.phase_name || m.life_phase || "").toString().trim();
+                      const already = linkedIds.has(m.memory_id);
+
+                      return (
+                        <div
+                          key={m.memory_id}
+                          style={{
+                            border: "1px solid var(--hdud-border)",
+                            background: "var(--hdud-surface)",
+                            borderRadius: 14,
+                            padding: 12,
+                            boxShadow: "var(--hdud-shadow-soft)",
+                            display: "flex",
+                            gap: 12,
+                            justifyContent: "space-between",
+                            alignItems: "flex-start",
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                              <div style={{ fontWeight: 950, letterSpacing: -0.2 }}>{titleText}</div>
+                              <div style={{ opacity: 0.72, fontSize: 12, fontWeight: 900 }}>
+                                #{m.memory_id}
+                                {phaseLabel ? ` • ${phaseLabel}` : ""}
+                                {when !== "—" ? ` • ${when}` : ""}
+                              </div>
+                            </div>
+                            <div style={{ marginTop: 8, opacity: 0.82, fontSize: 12, lineHeight: 1.35, fontWeight: 750 }}>
+                              {safeText(m.content, 220)}
+                            </div>
+                          </div>
+
+                          <div style={{ display: "flex", gap: 10, alignItems: "center", flexShrink: 0 }}>
+                            {already ? <div style={ui.pill}>já vinculada</div> : null}
+                            <button
+                              type="button"
+                              style={already ? { ...ui.btn, ...ui.btnDisabled } : ui.btnPrimary}
+                              disabled={already || saving}
+                              onClick={() => linkMemory(m.memory_id)}
+                              title={already ? "Esta memória já está vinculada" : "Vincular esta memória"}
+                            >
+                              Vincular
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  pageWrap: { width: "100%", maxWidth: 1920, margin: "0 auto", padding: "18px 18px", boxSizing: "border-box" },
-
-  headerCard: {},
-  headerTopRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" },
-  headerCTACol: { display: "flex", alignItems: "flex-start", justifyContent: "flex-end" },
-  ctaBtn: { paddingLeft: 14, paddingRight: 14 },
-
-  h1: { fontSize: 44, fontWeight: 950, letterSpacing: -0.9, margin: 0, lineHeight: 1.05 },
-  hSub: { opacity: 0.78, fontSize: 13, marginTop: 8, lineHeight: 1.35, maxWidth: 760 },
-
-  metaLine: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 },
-  metaBadge: {
-    fontSize: 12,
-    opacity: 0.85,
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    padding: "4px 10px",
-    borderRadius: 999,
-    fontWeight: 800,
-  },
-
-  headerControlsRow: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 14 },
-  searchInput: { flex: "1 1 320px", minWidth: 220 },
-  select: { width: 180, minWidth: 160 },
-
-  diagBox: {
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 12,
-    border: "1px solid var(--hdud-border)",
-    background: "rgba(255,255,255,0.02)",
-  },
-  diagLine: { fontSize: 12, opacity: 0.78, marginTop: 6 },
-
-  historyHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingBottom: 12,
-    borderBottom: "1px solid var(--hdud-border)",
-    marginBottom: 12,
-  },
-  historyTitle: { fontWeight: 950, fontSize: 14 },
-  historyRight: { display: "flex", alignItems: "center", gap: 10 },
-  historyPill: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    padding: "4px 10px",
-    borderRadius: 999,
-    fontSize: 12,
-    fontWeight: 800,
-    opacity: 0.9,
-    whiteSpace: "nowrap",
-  },
-
-  historyBodyGrid: { display: "grid", gridTemplateColumns: "360px 1fr", gap: 18, alignItems: "start" },
-  leftCol: {},
-  rightCol: {},
-
-  leftList: { display: "flex", flexDirection: "column", gap: 10 },
-  itemCard: {
-    border: "1px solid var(--hdud-border)",
-    borderRadius: 12,
-    padding: 12,
-    cursor: "pointer",
-    userSelect: "none",
-  },
-  itemTopRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 },
-  itemTitle: { fontWeight: 950, fontSize: 13, letterSpacing: -0.2 },
-  itemDesc: { marginTop: 8, fontSize: 12, opacity: 0.78, lineHeight: 1.35 },
-  itemMeta: { marginTop: 10, fontSize: 11, opacity: 0.7, display: "flex", gap: 8, alignItems: "center" },
-  itemActions: { marginTop: 10, display: "flex", justifyContent: "flex-end" },
-
-  statusPill: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    padding: "4px 10px",
-    borderRadius: 999,
-    fontSize: 12,
-    fontWeight: 900,
-    opacity: 0.9,
-    whiteSpace: "nowrap",
-  },
-
-  emptyList: {
-    border: "1px dashed var(--hdud-border)",
-    borderRadius: 12,
-    padding: 14,
-    background: "rgba(255,255,255,0.02)",
-  },
-
-  rightEmpty: {
-    border: "1px dashed var(--hdud-border)",
-    borderRadius: 12,
-    padding: 16,
-    background: "rgba(255,255,255,0.02)",
-  },
-  rightEmptyKicker: { fontSize: 11, letterSpacing: 0.6, textTransform: "uppercase", opacity: 0.7, fontWeight: 900 },
-  rightEmptyTitle: { fontSize: 18, fontWeight: 950, marginTop: 6 },
-  rightEmptyText: { marginTop: 10, fontSize: 12, opacity: 0.78, lineHeight: 1.45, maxWidth: 680 },
-  rightEmptyDivider: { marginTop: 14, marginBottom: 14, height: 1, background: "var(--hdud-border)", opacity: 0.7 },
-  rightEmptySectionTitle: { fontSize: 12, fontWeight: 950, opacity: 0.9 },
-  rightEmptyHint: { marginTop: 10, fontSize: 12, opacity: 0.75 },
-
-  quickRow: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 },
-  quickList: { marginTop: 8, marginBottom: 0, paddingLeft: 18, fontSize: 12, opacity: 0.78, lineHeight: 1.5 },
-
-  form: { border: "1px solid var(--hdud-border)", borderRadius: 12, padding: 14, background: "rgba(255,255,255,0.02)" },
-  formHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" },
-  formTitle: { fontWeight: 950, fontSize: 14 },
-  formMeta: { fontSize: 12, opacity: 0.75, marginTop: 4 },
-  formBadges: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" },
-  badge: {
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    padding: "4px 10px",
-    borderRadius: 999,
-    fontSize: 12,
-    fontWeight: 900,
-    opacity: 0.9,
-  },
-  formActions: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12, marginBottom: 10 },
-
-  label: { display: "block", marginTop: 10 },
-  labelTop: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, fontWeight: 900, opacity: 0.9, marginBottom: 6 },
-  counter: { display: "block", fontSize: 11, opacity: 0.7, marginTop: 6 },
-
-  suggestHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" },
-  suggestTitle: { fontWeight: 950, fontSize: 13, opacity: 0.95 },
-  suggestList: { marginTop: 10, marginBottom: 0, paddingLeft: 18, fontSize: 12, opacity: 0.78, lineHeight: 1.6 },
-  suggestHint: { marginTop: 8, fontSize: 11, opacity: 0.6 },
-  suggestCollapsed: { marginTop: 10, fontSize: 12, opacity: 0.75 },
-};

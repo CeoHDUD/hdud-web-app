@@ -307,14 +307,34 @@ export default function App() {
     setTokenToStorage(accessToken);
     setToken(accessToken);
 
+    // ✅ Política de pós-login:
+    // - respeita deep-links (ex: /memories/123), mas
+    // - NÃO volta para /chapters (evita "login cai em capítulos")
     const after = consumeAfterLoginPath();
-    if (after) {
+    const p = String(after || "").trim();
+
+    const isChapters =
+      p === "/chapters" ||
+      p.startsWith("/chapters?") ||
+      p.startsWith("/chapters#") ||
+      p.startsWith("/chapters/");
+
+    const isLoginish = p === "/login" || p.startsWith("/login?") || p.startsWith("/login#");
+
+    if (p && !isChapters && !isLoginish) {
       try {
-        window.location.assign(after);
+        window.location.assign(p);
         return;
       } catch {
         // ignore
       }
+    }
+
+    // fallback definitivo
+    try {
+      window.location.assign("/dashboard");
+    } catch {
+      // se falhar, o <Navigate> na rota /login resolve
     }
   }
 

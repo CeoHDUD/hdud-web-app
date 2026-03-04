@@ -405,47 +405,73 @@ export default function DashboardPage() {
     if (mode === "initial") setLoading(true);
     else setRefreshing(true);
 
+    // timeout hard (evita “pendurar/cancelar” no DevTools e confundir o diagnóstico)
+    const ctrl = new AbortController();
+    const timeoutMs = 12_000;
+    const to = setTimeout(() => ctrl.abort(), timeoutMs);
+
     try {
       const base = apiBase().replace("localhost", "127.0.0.1");
       const headers = { Authorization: `Bearer ${token}` };
 
-      const pMe = fetch(`${base}/me/profile`, { headers }).then(async (r) => {
+      const pMe = fetch(`${base}/me/profile`, { headers, signal: ctrl.signal }).then(async (r) => {
         if (!r.ok) throw new Error(`Falha ao carregar perfil (HTTP ${r.status}).`);
         return (await r.json()) as MeProfile;
       });
 
-      const pFeed = fetch(`${base}/feed?limit=24`, { headers }).then(async (r) => {
+      // ✅ FIX: usa contrato novo (v=0.1) e mantém o Dashboard independente do FeedPage
+      const pFeed = fetch(`${base}/feed?v=0.1&limit=24`, { headers, signal: ctrl.signal }).then(async (r) => {
         if (!r.ok) throw new Error(`Falha ao carregar feed (HTTP ${r.status}).`);
         return (await r.json()) as FeedResponse;
       });
 
-      const [meRes, feedRes] = await Promise.all([pMe, pFeed]);
+      // Não “mata” o dashboard se um endpoint falhar.
+      const [meSet, feedSet] = await Promise.allSettled([pMe, pFeed]);
       if (seq !== seqRef.current) return;
 
-      setMe(meRes);
-      setFeed(Array.isArray(feedRes?.items) ? feedRes.items : []);
+      if (meSet.status === "fulfilled") {
+        const meRes = meSet.value;
+        setMe(meRes);
 
-      // ✅ sincroniza AppShell (foto/bio sempre)
-      try {
-        const name = String(meRes?.name_public ?? "").trim() || "Autor";
-        const bio = String(meRes?.bio_short ?? "").trim() || "HDUD";
-        const headline = String(meRes?.location ?? "").trim() || "";
-        localStorage.setItem(
-          "HDUD_PROFILE",
-          JSON.stringify({
-            name,
-            bio,
-            headline,
-            avatar_url: meRes?.avatar_url ?? null,
-          })
-        );
-      } catch {}
+        // ✅ sincroniza AppShell (foto/bio sempre)
+        try {
+          const name = String(meRes?.name_public ?? "").trim() || "Autor";
+          const bio = String(meRes?.bio_short ?? "").trim() || "HDUD";
+          const headline = String(meRes?.location ?? "").trim() || "";
+          localStorage.setItem(
+            "HDUD_PROFILE",
+            JSON.stringify({
+              name,
+              bio,
+              headline,
+              avatar_url: meRes?.avatar_url ?? null,
+            })
+          );
+        } catch {}
+      } else {
+        setMe(null);
+      }
+
+      if (feedSet.status === "fulfilled") {
+        const feedRes = feedSet.value;
+        setFeed(Array.isArray(feedRes?.items) ? feedRes.items : []);
+      } else {
+        setFeed([]);
+        // Se perfil veio mas feed falhou, mostra erro suave (não derruba tudo)
+        if (meSet.status === "fulfilled") {
+          setError(feedSet.reason?.message || "Falha ao carregar o feed.");
+        } else {
+          setError(meSet.reason?.message || "Falha ao carregar seu universo.");
+        }
+      }
     } catch (e: any) {
       if (seq !== seqRef.current) return;
-      setError(e?.message || "Falha ao carregar seu universo.");
+      const msg = e?.name === "AbortError" ? "Timeout ao carregar seu universo. Tente novamente." : e?.message || "Falha ao carregar seu universo.";
+      setError(msg);
       setMe(null);
       setFeed([]);
     } finally {
+      clearTimeout(to);
       if (seq === seqRef.current) {
         setLoading(false);
         setRefreshing(false);
