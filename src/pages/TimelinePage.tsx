@@ -1,4 +1,5 @@
 // C:\HDUD_DATA\hdud-web-app\src\pages\TimelinePage.tsx
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -23,17 +24,14 @@ type TimelineResponse = {
 
 type FilterKey = "Tudo" | "Memórias" | "Capítulos";
 
-// =====================
-// Auth / API helpers
-// =====================
+const TIMELINE_LIMIT = 500;
+
 function tryExtractTokenFromValue(v: string): string | null {
   const s = (v || "").trim();
   if (!s) return null;
 
-  // JWT típico
   if (s.split(".").length === 3) return s;
 
-  // Às vezes salvam JSON no localStorage
   try {
     const obj = JSON.parse(s);
     const candidates = [
@@ -46,18 +44,11 @@ function tryExtractTokenFromValue(v: string): string | null {
     for (const t of candidates) {
       if (typeof t === "string" && t.trim().split(".").length === 3) return t.trim();
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
 
   return null;
 }
 
-/**
- * ✅ Ajuste MINIMAL / SEGURO:
- * O App.tsx padroniza token nestes 4 keys.
- * Evitamos varrer o localStorage inteiro (pode pegar token velho/errado).
- */
 function getAuthToken(): string | null {
   const candidates = ["hdud_access_token", "HDUD_TOKEN", "access_token", "token"];
 
@@ -104,6 +95,30 @@ function normalizeUrl(path: string): string {
   return base ? `${base}${path}` : path;
 }
 
+function buildTimelineUrl(filter: FilterKey, query: string): string {
+  const params = new URLSearchParams();
+  params.set("limit", String(TIMELINE_LIMIT));
+
+  const q = String(query || "").trim();
+  if (q) params.set("q", q);
+
+  if (filter === "Memórias") params.set("type", "memory");
+  else if (filter === "Capítulos") params.set("type", "chapter");
+
+  return `/api/timeline?${params.toString()}`;
+}
+
+function looksLikeHtml(value: any): boolean {
+  if (typeof value !== "string") return false;
+  const s = value.trim().toLowerCase();
+  return (
+    s.startsWith("<!doctype html") ||
+    s.startsWith("<html") ||
+    s.includes("<head") ||
+    s.includes("<body")
+  );
+}
+
 async function fetchJsonAny(
   path: string,
   token: string | null
@@ -112,7 +127,7 @@ async function fetchJsonAny(
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const r = await fetch(usedUrl, { headers });
+  const r = await fetch(usedUrl, { headers, cache: "no-store" });
   let data: any = null;
 
   const text = await r.text();
@@ -126,15 +141,59 @@ async function fetchJsonAny(
 }
 
 async function fetchTimeline(
-  token: string | null
+  token: string | null,
+  filter: FilterKey,
+  query: string
 ): Promise<{ ok: boolean; status: number; data: any; usedUrl: string; authSent: boolean }> {
-  const usedUrl = normalizeUrl("/timeline");
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
   const authSent = Boolean(token);
+  const primaryPath = buildTimelineUrl(filter, query);
+  const fallbackPath = primaryPath.replace(/^\/api/, "") || "/timeline";
+  const tries = [primaryPath, fallbackPath];
 
+  let last: { ok: boolean; status: number; data: any; usedUrl: string; authSent: boolean } = {
+    ok: false,
+    status: 0,
+    data: null,
+    usedUrl: normalizeUrl(primaryPath),
+    authSent,
+  };
+
+  for (const p of tries) {
+    const usedUrl = normalizeUrl(p);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const r = await fetch(usedUrl, { headers, cache: "no-store" });
+    const text = await r.text();
+
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
+    }
+
+    const candidate = { ok: r.ok, status: r.status, data, usedUrl, authSent };
+    last = candidate;
+
+    if (looksLikeHtml(data)) continue;
+    if (r.ok && data && typeof data === "object" && Array.isArray(data.items)) return candidate;
+    if (r.ok && data && typeof data === "object") return candidate;
+    if (r.status === 401) return candidate;
+  }
+
+  return last;
+}
+
+async function fetchJsonDirect(
+  path: string,
+  token: string | null
+): Promise<{ ok: boolean; status: number; data: any; usedUrl: string }> {
+  const usedUrl = normalizeUrl(path);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const r = await fetch(usedUrl, { headers });
+  const r = await fetch(usedUrl, { headers, cache: "no-store" });
   const text = await r.text();
 
   let data: any = null;
@@ -144,60 +203,9 @@ async function fetchTimeline(
     data = text;
   }
 
-  return { ok: r.ok, status: r.status, data, usedUrl, authSent };
+  return { ok: r.ok, status: r.status, data, usedUrl };
 }
 
-// =====================
-// Inventory helpers (REAL numbers)
-// =====================
-function unwrapArrayFromManyShapes(data: any): any[] | null {
-  if (!data) return null;
-  if (Array.isArray(data)) return data;
-
-  if (Array.isArray(data.items)) return data.items;
-  if (Array.isArray(data.memories)) return data.memories;
-  if (Array.isArray(data.chapters)) return data.chapters;
-
-  if (data.data) {
-    if (Array.isArray(data.data.items)) return data.data.items;
-    if (Array.isArray(data.data.memories)) return data.data.memories;
-    if (Array.isArray(data.data.chapters)) return data.data.chapters;
-  }
-
-  return null;
-}
-
-async function tryMany(
-  token: string | null,
-  paths: string[]
-): Promise<{
-  ok: boolean;
-  status: number;
-  data: any;
-  usedUrl: string;
-  attempts: Array<{ path: string; status: number; ok: boolean }>;
-}> {
-  const attempts: Array<{ path: string; status: number; ok: boolean }> = [];
-  let last = { ok: false, status: 0, data: null as any, usedUrl: "" };
-
-  for (const p of paths) {
-    try {
-      const r = await fetchJsonAny(p, token);
-      attempts.push({ path: r.usedUrl, status: r.status, ok: r.ok });
-      last = r;
-      if (r.ok) return { ...r, attempts };
-      if (r.status === 401) return { ...r, attempts };
-    } catch {
-      // ignore
-    }
-  }
-
-  return { ...last, attempts };
-}
-
-// =====================
-// Date / formatting
-// =====================
 function safeDateParse(value: string): Date | null {
   if (!value) return null;
 
@@ -260,69 +268,112 @@ function kindIcon(kind: TimelineKind): string {
   return "•";
 }
 
-// =====================
-// Normalize API -> UI model
-// (o /timeline da API entrega: { type, title, date, source_id, meta, ... })
-// =====================
-function normalizeApiTimelineItemToEvent(item: any): TimelineEvent | null {
-  if (!item || typeof item !== "object") return null;
-
-  const typeRaw = String(item.type ?? item.kind ?? "").trim().toLowerCase(); // memory|chapter|version
-  const title = String(item.title ?? "").trim() || "(sem título)";
-  const at = String(item.date ?? item.at ?? item.created_at ?? "").trim();
-
-  // IDs: preferimos os reais (memory_id/chapter_id/version) e caímos no source_id
-  const sourceId = String(item.source_id ?? item.id ?? "").trim();
-
-  let kind: TimelineKind = "Evento";
-  let source: TimelineEvent["source"] = "unknown";
-
-  if (typeRaw === "memory") {
-    kind = "Memória";
-    source = "memories";
-  } else if (typeRaw === "chapter") {
-    kind = "Capítulo";
-    source = "chapters";
-  } else if (typeRaw === "version") {
-    kind = "Versão";
-    source = "versions";
-  } else if (typeRaw === "ledger") {
-    kind = "Evento";
-    source = "ledger";
-  }
-
-  // id que habilita clique/navegação:
-  // memory:82, chapter:11, etc.
-  // Para versões: "memoryId:versionNumber" pode vir no source_id; nesse caso mantemos algo único.
-  let id = "";
-  if (kind === "Memória") id = `memory:${sourceId}`;
-  else if (kind === "Capítulo") id = `chapter:${sourceId}`;
-  else if (kind === "Versão") id = `version:${sourceId || `${item.memory_id ?? ""}:${item.version_number ?? ""}`}`;
-  else id = `event:${sourceId || Math.random().toString(36).slice(2)}`;
-
-  // note (quando existir)
-  const note =
-    (typeof item.note === "string" && item.note.trim()) ||
-    (typeof item.meta?.preview === "string" && item.meta.preview.trim()) ||
-    (typeof item.meta?.description === "string" && item.meta.description.trim()) ||
-    undefined;
-
-  // raw: mantemos tudo (inclui meta.nav vindo do backend)
-  const raw = item;
-
-  // at: se veio vazio, evita quebrar agrupamento
-  const atSafe = at || new Date().toISOString();
-
-  return { id, at: atSafe, title, kind, note, source, raw };
+function fallbackTitleByType(typeRaw: string): string {
+  if (typeRaw === "memory") return "(Memória sem título)";
+  if (typeRaw === "chapter") return "(Capítulo sem título)";
+  if (typeRaw === "version") return "(Versão sem título)";
+  if (typeRaw === "rollback") return "(Rollback)";
+  return "(Evento)";
 }
 
-// =====================
-// Routing helpers (click to open)
-// =====================
 function toNum(v: any): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string" && v.trim() && Number.isFinite(Number(v))) return Number(v);
   return null;
+}
+
+function firstString(...values: any[]): string {
+  for (const v of values) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+function normalizeTypeToken(input: any): string {
+  const raw = String(input || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (!raw) return "";
+
+  if (raw === "memory" || raw === "memories" || raw === "memoria" || raw === "memorias") {
+    return "memory";
+  }
+
+  if (raw === "chapter" || raw === "chapters" || raw === "capitulo" || raw === "capitulos") {
+    return "chapter";
+  }
+
+  if (raw === "version" || raw === "versions" || raw === "versao" || raw === "versoes") {
+    return "version";
+  }
+
+  if (raw === "rollback" || raw === "revert" || raw === "reverted") {
+    return "rollback";
+  }
+
+  if (raw === "ledger") return "ledger";
+
+  if (raw.includes("memory") || raw.includes("memoria")) return "memory";
+  if (raw.includes("chapter") || raw.includes("capitulo")) return "chapter";
+  if (raw.includes("version") || raw.includes("versao")) return "version";
+  if (raw.includes("rollback") || raw.includes("revert")) return "rollback";
+  if (raw.includes("ledger")) return "ledger";
+
+  return raw;
+}
+
+function extractTypeRaw(item: any): string {
+  if (!item || typeof item !== "object") return "";
+
+  const explicit = firstString(
+    item?.event_type,
+    item?.eventType,
+    item?.type,
+    item?.kind,
+    item?.entity_type,
+    item?.entityType,
+    item?.target_type,
+    item?.targetType,
+    item?.source_type,
+    item?.sourceType,
+    item?.meta?.event_type,
+    item?.meta?.eventType,
+    item?.meta?.type,
+    item?.meta?.kind,
+    item?.meta?.entity_type,
+    item?.meta?.entityType,
+    item?.meta?.target_type,
+    item?.meta?.targetType
+  );
+
+  const normalizedExplicit = normalizeTypeToken(explicit);
+  if (normalizedExplicit) return normalizedExplicit;
+
+  const sourceId = toNum(
+    item?.source_id ?? item?.sourceId ?? item?.id ?? item?.entity_id ?? item?.entityId
+  );
+
+  if (sourceId && sourceId > 0) {
+    const hasMemoryId =
+      toNum(item?.memory_id) ??
+      toNum(item?.memoryId) ??
+      toNum(item?.meta?.memory_id) ??
+      toNum(item?.meta?.memoryId);
+
+    const hasChapterId =
+      toNum(item?.chapter_id) ??
+      toNum(item?.chapterId) ??
+      toNum(item?.meta?.chapter_id) ??
+      toNum(item?.meta?.chapterId);
+
+    if (hasMemoryId && !hasChapterId) return "memory";
+    if (hasChapterId && !hasMemoryId) return "chapter";
+  }
+
+  return "";
 }
 
 function extractIdFromTimelineKey(
@@ -344,73 +395,168 @@ function extractTarget(ev: TimelineEvent): { kind: "memory" | "chapter" | "unkno
   if (byKey.id) return byKey;
 
   const raw = ev.raw || {};
+  const typeRaw = extractTypeRaw(raw);
 
-  // ✅ tentar meta do backend (/timeline)
+  const sourceId = toNum(raw?.source_id ?? raw?.sourceId ?? raw?.id ?? raw?.entity_id ?? raw?.entityId);
+
   const metaMid = toNum(raw?.meta?.memory_id) ?? toNum(raw?.meta?.memoryId);
   const metaCid = toNum(raw?.meta?.chapter_id) ?? toNum(raw?.meta?.chapterId);
-  if (metaMid && metaMid > 0) return { kind: "memory", id: metaMid };
-  if (metaCid && metaCid > 0) return { kind: "chapter", id: metaCid };
 
-  // memory id (fallbacks)
   const mid =
     toNum(raw?.memory_id) ??
     toNum(raw?.memoryId) ??
     toNum(raw?.id_memory) ??
-    toNum(raw?.idMemory) ??
-    toNum(raw?.entity_id) ??
-    toNum(raw?.entityId);
+    toNum(raw?.idMemory);
 
-  // chapter id (fallbacks)
   const cid =
     toNum(raw?.chapter_id) ??
     toNum(raw?.chapterId) ??
     toNum(raw?.id_chapter) ??
     toNum(raw?.idChapter);
 
-  if (mid && mid > 0) return { kind: "memory", id: mid };
-  if (cid && cid > 0) return { kind: "chapter", id: cid };
+  if (typeRaw === "memory") {
+    return { kind: "memory", id: sourceId ?? metaMid ?? mid ?? null };
+  }
+
+  if (typeRaw === "chapter") {
+    return { kind: "chapter", id: sourceId ?? metaCid ?? cid ?? null };
+  }
+
+  if (metaMid && !metaCid) return { kind: "memory", id: metaMid };
+  if (metaCid && !metaMid) return { kind: "chapter", id: metaCid };
+
+  if (mid && !cid) return { kind: "memory", id: mid };
+  if (cid && !mid) return { kind: "chapter", id: cid };
 
   return { kind: "unknown", id: null };
 }
 
-// =====================
-// Kind normalization (UI-only)
-// =====================
-function normalizeKind(ev: TimelineEvent): TimelineKind {
-  const incoming = ev.kind;
-
-  const id = String(ev.id || "").toLowerCase();
-  const src = String(ev.source || "").toLowerCase();
-  const title = String(ev.title || "").toLowerCase();
-  const note = String(ev.note || "").toLowerCase();
-
-  const target = extractTarget(ev);
-  if (target.kind === "memory" && target.id) return "Memória";
-  if (target.kind === "chapter" && target.id) return "Capítulo";
-
-  if (incoming && incoming !== "Evento" && incoming !== "Versão") return incoming;
-
-  if (id.startsWith("memory:")) return "Memória";
-  if (id.startsWith("chapter:")) return "Capítulo";
-  if (id.startsWith("version:")) return "Versão";
-
-  if (src === "memories") return "Memória";
-  if (src === "chapters") return "Capítulo";
-  if (src === "versions") return "Versão";
-
-  const hay = `${title} ${note}`;
-  if (hay.includes("rollback") || hay.includes("reverter") || hay.includes("revert")) return "Rollback";
-  if (hay.includes("capítulo") || hay.includes("chapter")) return "Capítulo";
-  if (hay.includes("memória") || hay.includes("memoria") || hay.includes("memory")) return "Memória";
-  if (hay.includes("versão") || hay.includes("version")) return "Versão";
-
-  return "Evento";
+function extractNav(item: any): string | null {
+  const nav = firstString(item?.nav, item?.meta?.nav);
+  return nav || null;
 }
 
-function mapKindToFilter(kind: TimelineKind): FilterKey | null {
-  if (kind === "Memória") return "Memórias";
-  if (kind === "Capítulo") return "Capítulos";
-  return null;
+function parseNavTarget(nav: string | null): { kind: "memory" | "chapter" | "unknown"; id: number | null } {
+  const s = String(nav || "").trim();
+  if (!s) return { kind: "unknown", id: null };
+
+  const m = s.match(/\/memories\/(\d+)/i);
+  if (m) return { kind: "memory", id: Number(m[1]) };
+
+  const c = s.match(/\/chapters\/(\d+)/i);
+  if (c) return { kind: "chapter", id: Number(c[1]) };
+
+  return { kind: "unknown", id: null };
+}
+
+function detectEventKind(ev: TimelineEvent): TimelineKind {
+  const raw = ev.raw || {};
+  const typeRaw = extractTypeRaw(raw);
+
+  if (typeRaw === "memory") return "Memória";
+  if (typeRaw === "chapter") return "Capítulo";
+  if (typeRaw === "version") return "Versão";
+  if (typeRaw === "rollback") return "Rollback";
+  if (typeRaw === "ledger") return "Evento";
+
+  const navTarget = parseNavTarget(extractNav(raw));
+  if (navTarget.kind === "memory") return "Memória";
+  if (navTarget.kind === "chapter") return "Capítulo";
+
+  const source = String(ev.source || "").trim().toLowerCase();
+  if (source === "memories") return "Memória";
+  if (source === "chapters") return "Capítulo";
+  if (source === "versions") return "Versão";
+  if (source === "ledger") return "Evento";
+
+  const idKind = extractIdFromTimelineKey(ev.id);
+  if (idKind.kind === "memory") return "Memória";
+  if (idKind.kind === "chapter") return "Capítulo";
+
+  const target = extractTarget(ev);
+  if (target.kind === "memory") return "Memória";
+  if (target.kind === "chapter") return "Capítulo";
+
+  return ev.kind || "Evento";
+}
+
+function normalizeApiTimelineItemToEvent(item: any): TimelineEvent | null {
+  if (!item || typeof item !== "object") return null;
+
+  const typeRaw = extractTypeRaw(item);
+  const title =
+    firstString(
+      item?.title,
+      item?.name,
+      item?.headline,
+      item?.label,
+      item?.meta?.title,
+      item?.meta?.name
+    ) || fallbackTitleByType(typeRaw);
+
+  const at = firstString(
+    item?.date,
+    item?.at,
+    item?.activity_at,
+    item?.created_at,
+    item?.updated_at,
+    item?.event_at,
+    item?.occurred_at,
+    item?.meta?.activity_at
+  );
+
+  const sourceId = firstString(
+    item?.source_id,
+    item?.sourceId,
+    item?.id,
+    item?.entity_id,
+    item?.entityId
+  );
+
+  let source: TimelineEvent["source"] = "unknown";
+  if (typeRaw === "memory") source = "memories";
+  else if (typeRaw === "chapter") source = "chapters";
+  else if (typeRaw === "version") source = "versions";
+  else if (typeRaw === "ledger" || typeRaw === "rollback") source = "ledger";
+
+  let id = "";
+  if (typeRaw === "memory") id = `memory:${sourceId || item?.memory_id || item?.memoryId || ""}`;
+  else if (typeRaw === "chapter") id = `chapter:${sourceId || item?.chapter_id || item?.chapterId || ""}`;
+  else if (typeRaw === "version") {
+    id = `version:${sourceId || `${item?.memory_id ?? ""}:${item?.version_number ?? ""}`}`;
+  } else if (typeRaw === "rollback") {
+    id = `rollback:${sourceId || Math.random().toString(36).slice(2)}`;
+  } else {
+    id = `event:${sourceId || Math.random().toString(36).slice(2)}`;
+  }
+
+  const note =
+    firstString(
+      item?.note,
+      item?.summary,
+      item?.preview,
+      item?.description,
+      item?.meta?.note,
+      item?.meta?.preview,
+      item?.meta?.description,
+      item?.meta?.summary
+    ) || undefined;
+
+  const raw = item;
+  const atSafe = at || new Date().toISOString();
+
+  const draft: TimelineEvent = {
+    id,
+    at: atSafe,
+    title,
+    kind: "Evento",
+    note,
+    source,
+    raw,
+  };
+
+  draft.kind = detectEventKind(draft);
+  return draft;
 }
 
 function labelForKind(kind: TimelineKind): string {
@@ -421,47 +567,65 @@ function labelForKind(kind: TimelineKind): string {
   return "Evento";
 }
 
-function entityKey(ev: TimelineEvent): string | null {
-  const t = extractTarget(ev);
-  if (t.kind === "memory" && t.id) return `memory:${t.id}`;
-  if (t.kind === "chapter" && t.id) return `chapter:${t.id}`;
+function countDistinctByKind(events: TimelineEvent[], kind: TimelineKind): number {
+  const ids = new Set<string>();
 
-  // Fallback por título (quando backend não entrega ids).
-  const title = String(ev.title || "").trim().toLowerCase();
-  const src = String(ev.source || "unknown").trim().toLowerCase();
+  for (const ev of events) {
+    if (detectEventKind(ev) !== kind) continue;
 
-  if (title) return `fallback:${src}:${title}`;
+    const navTarget = parseNavTarget(extractNav(ev.raw));
+    if (navTarget.kind !== "unknown" && navTarget.id) {
+      ids.add(`${navTarget.kind}:${navTarget.id}`);
+      continue;
+    }
+
+    const t = extractTarget(ev);
+    if (t.kind !== "unknown" && t.id) {
+      ids.add(`${t.kind}:${t.id}`);
+      continue;
+    }
+
+    ids.add(ev.id);
+  }
+
+  return ids.size;
+}
+
+function getSummaryCounts(meta: any) {
+  const inventoryMemories = toNum(meta?.summary?.inventory?.memories ?? meta?.inventory?.memories);
+  const inventoryChapters = toNum(meta?.summary?.inventory?.chapters ?? meta?.inventory?.chapters);
+
+  const searchMemories = toNum(meta?.summary?.search?.memories ?? meta?.search_inventory?.memories);
+  const searchChapters = toNum(meta?.summary?.search?.chapters ?? meta?.search_inventory?.chapters);
+
+  const resultMemories = toNum(meta?.summary?.result?.memories);
+  const resultChapters = toNum(meta?.summary?.result?.chapters);
+
+  const visibleMemories = toNum(meta?.summary?.visible?.memories);
+  const visibleChapters = toNum(meta?.summary?.visible?.chapters);
+
+  return {
+    inventoryMemories,
+    inventoryChapters,
+    searchMemories,
+    searchChapters,
+    resultMemories,
+    resultChapters,
+    visibleMemories,
+    visibleChapters,
+  };
+}
+
+function getMatchReasonLabel(raw: any): string | null {
+  const reason = firstString(raw?.match_reason, raw?.meta?.match_reason).toLowerCase();
+
+  if (reason === "chapter_context") return "Contexto do capítulo";
+  if (reason === "direct") return "Match direto";
   return null;
 }
 
-// Mantém APENAS o evento mais recente por entidade.
-// (id real quando existir; senão fallback por source+title)
-function collapseToLatestPerEntity(list: TimelineEvent[]): TimelineEvent[] {
-  const sorted = [...list].sort(sortEventsDesc);
-
-  const seen = new Set<string>();
-  const out: TimelineEvent[] = [];
-
-  for (const ev of sorted) {
-    const k = entityKey(ev);
-    if (!k) continue;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(ev);
-  }
-
-  // Se não conseguimos identificar nenhuma “entidade”, devolve um recorte seguro.
-  if (out.length === 0) return sorted.slice(0, 50);
-
-  return out;
-}
-
-// =====================
-// Page
-// =====================
 export default function TimelinePage() {
   const navigate = useNavigate();
-
   const filters: FilterKey[] = ["Tudo", "Memórias", "Capítulos"];
 
   const [activeFilter, setActiveFilter] = useState<FilterKey>("Tudo");
@@ -472,71 +636,93 @@ export default function TimelinePage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [searchTick, setSearchTick] = useState(0);
 
-  // ✅ INVENTÁRIO REAL (79 / 11 etc.)
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventoryMemoriesTotal, setInventoryMemoriesTotal] = useState<number | null>(null);
   const [inventoryChaptersTotal, setInventoryChaptersTotal] = useState<number | null>(null);
-
-  // diagnóstico
-  const [debugOpen, setDebugOpen] = useState(false);
-  const [debugInfo, setDebugInfo] = useState<{
-    usedUrl: string;
-    authSent: boolean;
-    httpStatus: number | null;
-    tokenPresent: boolean;
-  }>({
-    usedUrl: normalizeUrl("/timeline"),
-    authSent: false,
-    httpStatus: null,
-    tokenPresent: Boolean(getAuthToken()),
-  });
+  const [searchMemoriesTotal, setSearchMemoriesTotal] = useState<number | null>(null);
+  const [searchChaptersTotal, setSearchChaptersTotal] = useState<number | null>(null);
+  const [visibleApiMemoriesTotal, setVisibleApiMemoriesTotal] = useState<number | null>(null);
+  const [visibleApiChaptersTotal, setVisibleApiChaptersTotal] = useState<number | null>(null);
 
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
-  const clickLockRef = useRef(false);
+  const requestSeqRef = useRef(0);
+  const fetchLockRef = useRef(0);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setDebouncedQuery(query.trim());
+    }, 250);
+
+    return () => window.clearTimeout(t);
+  }, [query]);
 
   function toggleOpen(id: string) {
     setOpenMap((prev) => ({ ...prev, [id]: !prev[id] }));
   }
 
   function openEvent(ev: TimelineEvent) {
-    const t = extractTarget(ev);
+    const raw = ev.raw || {};
+    const nav = extractNav(raw);
+    const navTarget = parseNavTarget(nav);
 
-    if (clickLockRef.current) return;
-    clickLockRef.current = true;
-    setTimeout(() => (clickLockRef.current = false), 350);
-
-    if (t.kind === "memory" && t.id) {
-      navigate(`/memories/${t.id}`);
+    if (navTarget.kind === "memory" && navTarget.id) {
+      navigate(`/memories/${navTarget.id}`);
       return;
     }
 
-    if (t.kind === "chapter" && t.id) {
+    if (navTarget.kind === "chapter" && navTarget.id) {
       try {
-        sessionStorage.setItem("hdud_open_chapter_id", String(t.id));
+        sessionStorage.setItem("hdud_open_chapter_id", String(navTarget.id));
       } catch {}
-      navigate(`/chapters`);
+      navigate("/chapters");
+      return;
+    }
+
+    const memoryId =
+      raw.memory_id ??
+      raw.memoryId ??
+      raw.meta?.memory_id ??
+      raw.meta?.memoryId ??
+      null;
+
+    const chapterId =
+      raw.chapter_id ??
+      raw.chapterId ??
+      raw.meta?.chapter_id ??
+      raw.meta?.chapterId ??
+      null;
+
+    if (memoryId) {
+      navigate(`/memories/${memoryId}`);
+      return;
+    }
+
+    if (chapterId) {
+      try {
+        sessionStorage.setItem("hdud_open_chapter_id", String(chapterId));
+      } catch {}
+      navigate("/chapters");
       return;
     }
 
     toggleOpen(ev.id);
   }
 
-  async function loadTimeline() {
+  async function loadTimeline(filter: FilterKey, q: string) {
     setLoading(true);
     setErrorMsg(null);
 
     const token = getAuthToken();
+    const seq = ++requestSeqRef.current;
+    fetchLockRef.current = seq;
 
     try {
-      const { ok, status, data, usedUrl, authSent } = await fetchTimeline(token);
+      const { ok, status, data } = await fetchTimeline(token, filter, q);
 
-      setDebugInfo({
-        usedUrl,
-        authSent,
-        httpStatus: status,
-        tokenPresent: Boolean(token),
-      });
+      if (fetchLockRef.current !== seq) return;
 
       if (!ok) {
         const detail =
@@ -547,30 +733,55 @@ export default function TimelinePage() {
         setErrorMsg(`Não foi possível carregar a Timeline (HTTP ${status}). ${detail || ""}`.trim());
         setEvents([]);
         setWarnings([]);
-        setLoading(false);
+        return;
+      }
+
+      if (looksLikeHtml(data)) {
+        setErrorMsg("A Timeline recebeu HTML no lugar de JSON. Use a rota /api/timeline no frontend.");
+        setEvents([]);
+        setWarnings([]);
         return;
       }
 
       const payload = data as TimelineResponse;
-
-      const rawItems = Array.isArray(payload?.items) ? payload.items : Array.isArray(data?.items) ? data.items : [];
+      const rawItems = Array.isArray(payload?.items)
+        ? payload.items
+        : Array.isArray((data as any)?.items)
+        ? (data as any).items
+        : [];
       const warns = Array.isArray(payload?.warnings) ? payload.warnings : [];
 
       const normalized: TimelineEvent[] = [];
       for (const it of rawItems) {
         const ev = normalizeApiTimelineItemToEvent(it);
-        if (ev) normalized.push(ev);
+        if (!ev) continue;
+        if (detectEventKind(ev) === "Versão") continue;
+        normalized.push(ev);
       }
+
+      const summary = getSummaryCounts((payload as any)?.meta || (data as any)?.meta || null);
+
+      if (summary.inventoryMemories != null) setInventoryMemoriesTotal(summary.inventoryMemories);
+      if (summary.inventoryChapters != null) setInventoryChaptersTotal(summary.inventoryChapters);
+
+      setSearchMemoriesTotal(summary.searchMemories);
+      setSearchChaptersTotal(summary.searchChapters);
+      setVisibleApiMemoriesTotal(summary.resultMemories ?? summary.visibleMemories);
+      setVisibleApiChaptersTotal(summary.resultChapters ?? summary.visibleChapters);
 
       setEvents(normalized.sort(sortEventsDesc));
       setWarnings(warns);
       setLastUpdated(new Date());
+      setOpenMap({});
     } catch {
+      if (fetchLockRef.current !== seq) return;
       setErrorMsg("Falha de rede ao carregar a Timeline. Verifique API e token.");
       setEvents([]);
       setWarnings([]);
     } finally {
-      setLoading(false);
+      if (fetchLockRef.current === seq) {
+        setLoading(false);
+      }
     }
   }
 
@@ -590,124 +801,141 @@ export default function TimelinePage() {
     setInventoryLoading(true);
 
     try {
-      // MEMÓRIAS (INVENTÁRIO REAL)
-      const memRes = await tryMany(token, [
-        "/api/memories",
-        ...(authorOk
-          ? [`/api/authors/${authorId}/memories`, `/api/author/${authorId}/memories`, `/api/memories/${authorId}`]
-          : []),
+      const memPath = authorOk
+        ? `/api/authors/${authorId}/memories`
+        : `/api/memories`;
+
+      const chapPath = authorOk
+        ? `/api/authors/${authorId}/chapters`
+        : `/api/chapters`;
+
+      const [memRes, chapRes] = await Promise.all([
+        fetchJsonDirect(memPath, token),
+        fetchJsonDirect(chapPath, token),
       ]);
 
+      const memData = memRes.data;
+      const chapData = chapRes.data;
+
       const memTotalFromMeta =
-        (memRes?.data &&
-          typeof memRes.data === "object" &&
-          (memRes.data?.total ?? memRes.data?.meta?.total ?? memRes.data?.meta?.count ?? memRes.data?.count)) ??
+        (memData &&
+          typeof memData === "object" &&
+          ((memData as any)?.total ??
+            (memData as any)?.meta?.total ??
+            (memData as any)?.meta?.count ??
+            (memData as any)?.count)) ??
         null;
 
       if (typeof memTotalFromMeta === "number" && Number.isFinite(memTotalFromMeta)) {
         setInventoryMemoriesTotal(memTotalFromMeta);
       } else {
-        const memList = unwrapArrayFromManyShapes(memRes.data);
-        if (Array.isArray(memList)) {
-          const ids = new Set<number>();
-          for (const x of memList) {
-            const id = toNum(x?.memory_id ?? x?.id ?? x?.memoryId ?? x?.id_memory);
-            if (id && id > 0) ids.add(id);
-          }
-          setInventoryMemoriesTotal(ids.size || memList.length);
-        } else {
-          setInventoryMemoriesTotal(null);
+        const memList = Array.isArray((memData as any)?.items)
+          ? (memData as any).items
+          : Array.isArray((memData as any)?.memories)
+          ? (memData as any).memories
+          : Array.isArray(memData)
+          ? memData
+          : [];
+
+        const ids = new Set<number>();
+        for (const x of memList) {
+          const id = toNum(
+            (x as any)?.memory_id ??
+              (x as any)?.id ??
+              (x as any)?.memoryId ??
+              (x as any)?.id_memory
+          );
+          if (id && id > 0) ids.add(id);
         }
+        setInventoryMemoriesTotal(ids.size || memList.length || null);
       }
 
-      // CAPÍTULOS
-      const chapRes = await tryMany(token, [
-        "/api/chapters",
-        "/api/chapter",
-        "/api/chapters/list",
-        "/api/chapter/list",
-        ...(authorOk ? [`/api/authors/${authorId}/chapters`, `/api/author/${authorId}/chapters`] : []),
-      ]);
+      const chapList = Array.isArray((chapData as any)?.items)
+        ? (chapData as any).items
+        : Array.isArray((chapData as any)?.chapters)
+        ? (chapData as any).chapters
+        : Array.isArray(chapData)
+        ? chapData
+        : [];
 
-      const chapList = unwrapArrayFromManyShapes(chapRes.data);
-      setInventoryChaptersTotal(Array.isArray(chapList) ? chapList.length : null);
+      const chapIds = new Set<number>();
+      for (const x of chapList) {
+        const id = toNum((x as any)?.chapter_id ?? (x as any)?.id ?? (x as any)?.chapterId);
+        if (id && id > 0) chapIds.add(id);
+      }
+      setInventoryChaptersTotal(chapIds.size || chapList.length || null);
     } finally {
       setInventoryLoading(false);
     }
   }
 
   async function loadAll() {
-    await Promise.all([loadTimeline(), loadInventory()]);
+    await Promise.all([loadTimeline(activeFilter, debouncedQuery), loadInventory()]);
+  }
+
+  function runSearchNow() {
+    const q = query.trim();
+    setDebouncedQuery(q);
+    setSearchTick((v) => v + 1);
   }
 
   useEffect(() => {
-    let mounted = true;
-    (async () => {
-      if (!mounted) return;
-      await loadAll();
-    })();
-    return () => {
-      mounted = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    loadInventory();
   }, []);
 
-  // Contadores “de eventos” (suporte interno; chips usam inventário)
-  const eventCounts = useMemo(() => {
-    return {
-      Tudo: events.length,
-      Memórias: events.filter((e) => normalizeKind(e) === "Memória").length,
-      Capítulos: events.filter((e) => normalizeKind(e) === "Capítulo").length,
-    };
+  useEffect(() => {
+    loadTimeline(activeFilter, debouncedQuery);
+  }, [activeFilter, debouncedQuery, searchTick]);
+
+  const allDisplayableEvents = useMemo(() => {
+    return events.filter((ev) => detectEventKind(ev) !== "Versão");
   }, [events]);
 
-  // ✅ Chips: INVENTÁRIO REAL (quando disponível)
-  const chipCounts = useMemo(() => {
-    const mem = inventoryMemoriesTotal ?? eventCounts.Memórias;
-    const chap = inventoryChaptersTotal ?? eventCounts.Capítulos;
-
-    const hasReal = inventoryMemoriesTotal != null || inventoryChaptersTotal != null;
-    const all = hasReal ? mem + chap : events.length;
-
-    return {
-      Tudo: all,
-      Memórias: mem,
-      Capítulos: chap,
-    };
-  }, [events.length, inventoryMemoriesTotal, inventoryChaptersTotal, eventCounts.Memórias, eventCounts.Capítulos]);
-
-  // ✅ Não renderiza “Versão”
   const displayEvents = useMemo(() => {
-    return events.filter((ev) => normalizeKind(ev) !== "Versão");
-  }, [events]);
-
-  const filteredEvents = useMemo(() => {
-    const searching = Boolean(query.trim());
-
-    // Ao buscar: colapsa para “estado atual” (max versão)
-    const baseList = searching ? collapseToLatestPerEntity(displayEvents) : displayEvents;
-
-    let list = baseList;
-
-    // filtro por tipo
-    if (activeFilter !== "Tudo") {
-      const want: TimelineKind = activeFilter === "Memórias" ? "Memória" : "Capítulo";
-      list = list.filter((e) => normalizeKind(e) === want);
+    if (activeFilter === "Memórias") {
+      return allDisplayableEvents.filter((ev) => detectEventKind(ev) === "Memória");
     }
 
-    const q = query.trim().toLowerCase();
-    if (!q) return list;
+    if (activeFilter === "Capítulos") {
+      return allDisplayableEvents.filter((ev) => detectEventKind(ev) === "Capítulo");
+    }
 
-    return list.filter((e) => {
-      const hay = [e.title, e.note, e.id].filter(Boolean).join(" ").toLowerCase();
-      return hay.includes(q);
-    });
-  }, [displayEvents, activeFilter, query]);
+    return allDisplayableEvents;
+  }, [allDisplayableEvents, activeFilter]);
+
+  const chipCounts = useMemo(() => {
+    const visibleMemoriesFallback = countDistinctByKind(events, "Memória");
+    const visibleChaptersFallback = countDistinctByKind(events, "Capítulo");
+    const searchActive = debouncedQuery.trim().length > 0;
+
+    const memories = searchActive
+      ? searchMemoriesTotal ?? visibleApiMemoriesTotal ?? visibleMemoriesFallback
+      : inventoryMemoriesTotal ?? visibleApiMemoriesTotal ?? visibleMemoriesFallback;
+
+    const chapters = searchActive
+      ? searchChaptersTotal ?? visibleApiChaptersTotal ?? visibleChaptersFallback
+      : inventoryChaptersTotal ?? visibleApiChaptersTotal ?? visibleChaptersFallback;
+
+    return {
+      Tudo: memories + chapters,
+      Memórias: memories,
+      Capítulos: chapters,
+    };
+  }, [
+    events,
+    inventoryMemoriesTotal,
+    inventoryChaptersTotal,
+    searchMemoriesTotal,
+    searchChaptersTotal,
+    visibleApiMemoriesTotal,
+    visibleApiChaptersTotal,
+    debouncedQuery,
+  ]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, TimelineEvent[]>();
 
-    for (const ev of filteredEvents) {
+    for (const ev of displayEvents) {
       const d = safeDateParse(ev.at);
       const key = d ? formatDayLabel(d) : "Sem data";
       if (!map.has(key)) map.set(key, []);
@@ -722,7 +950,7 @@ export default function TimelinePage() {
 
     entries.sort((a, b) => b.sortKey - a.sortKey);
     return entries;
-  }, [filteredEvents]);
+  }, [displayEvents]);
 
   const statusLine = useMemo(() => {
     if (loading) return "Carregando…";
@@ -730,15 +958,40 @@ export default function TimelinePage() {
     return "Ativa";
   }, [loading, errorMsg]);
 
+  const inventoryLine = useMemo(() => {
+    const mem = inventoryMemoriesTotal;
+    const chap = inventoryChaptersTotal;
+    const searchActive = debouncedQuery.trim().length > 0;
+
+    if (!searchActive) {
+      if (mem == null && chap == null) return null;
+
+      const parts: string[] = [];
+      if (mem != null) parts.push(`Memórias no acervo: ${mem}`);
+      if (chap != null) parts.push(`Capítulos no acervo: ${chap}`);
+      return parts.join(" • ");
+    }
+
+    const parts: string[] = [];
+    if (searchMemoriesTotal != null) parts.push(`Memórias encontradas: ${searchMemoriesTotal}`);
+    if (searchChaptersTotal != null) parts.push(`Capítulos encontrados: ${searchChaptersTotal}`);
+    return parts.length ? parts.join(" • ") : null;
+  }, [
+    inventoryMemoriesTotal,
+    inventoryChaptersTotal,
+    searchMemoriesTotal,
+    searchChaptersTotal,
+    debouncedQuery,
+  ]);
+
   return (
     <div style={styles.page}>
-      {/* Header */}
       <div style={styles.card}>
         <div style={styles.headerRow}>
           <div style={{ minWidth: 0 }}>
             <div style={styles.h1}>Timeline</div>
             <div style={styles.sub}>
-              Nada se perde. Aqui está a linha do tempo do que aconteceu na sua história — com eventos claros e clicáveis.
+              Nada se perde. Aqui está a linha do tempo do que aconteceu na sua história — agora com trilho híbrido entre eventos materializados, acervo real e contexto de capítulo.
             </div>
 
             <div style={styles.badgeRow}>
@@ -757,31 +1010,7 @@ export default function TimelinePage() {
                   </span>
                 ) : null}
               </span>
-
-              <button type="button" style={styles.btnGhost} onClick={() => setDebugOpen((v) => !v)}>
-                {debugOpen ? "Ocultar diagnóstico" : "Diagnóstico"}
-              </button>
             </div>
-
-            {debugOpen && (
-              <div style={styles.diagBox}>
-                <div style={styles.diagLine}>
-                  <b>Endpoint</b>: {debugInfo.usedUrl}
-                </div>
-                <div style={styles.diagLine}>
-                  <b>Authorization enviado</b>: {debugInfo.authSent ? "sim" : "não"}
-                </div>
-                <div style={styles.diagLine}>
-                  <b>HTTP</b>: {debugInfo.httpStatus == null ? "—" : debugInfo.httpStatus}
-                </div>
-                <div style={styles.diagLine}>
-                  <b>Token</b>: {debugInfo.tokenPresent ? "detectado" : "ausente"}
-                </div>
-                <div style={styles.diagHint}>
-                  Inventário (Memórias/Capítulos) é carregado via <code>/api/*</code> para bater com números reais.
-                </div>
-              </div>
-            )}
           </div>
 
           <div style={styles.headerActions}>
@@ -797,16 +1026,16 @@ export default function TimelinePage() {
         </div>
       </div>
 
-      {/* Filters + Search */}
       <div style={styles.card}>
         <div style={styles.rowBetween}>
           <div>
             <div style={styles.cardTitle}>Em foco</div>
-            <div style={styles.cardMeta}>Filtre por tipo, se quiser — a Timeline continua sendo uma linha única.</div>
+            <div style={styles.cardMeta}>Busca e filtro obedecem à API real da Timeline híbrida.</div>
+            {inventoryLine ? <div style={{ ...styles.cardMeta, marginTop: 6 }}>{inventoryLine}</div> : null}
           </div>
 
           <div style={styles.smallMuted}>
-            Eventos: <b>{filteredEvents.length}</b> / {displayEvents.length}
+            Visíveis: <b>{displayEvents.length}</b>
             {inventoryLoading ? <span style={{ marginLeft: 8, opacity: 0.75 }}>• Inventário…</span> : null}
           </div>
         </div>
@@ -814,7 +1043,12 @@ export default function TimelinePage() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
           {filters.map((f) => {
             const isActive = f === activeFilter;
-            const count = f === "Tudo" ? chipCounts.Tudo : f === "Memórias" ? chipCounts.Memórias : chipCounts.Capítulos;
+            const count =
+              f === "Tudo"
+                ? chipCounts.Tudo
+                : f === "Memórias"
+                ? chipCounts.Memórias
+                : chipCounts.Capítulos;
 
             return (
               <button
@@ -837,10 +1071,35 @@ export default function TimelinePage() {
               style={styles.input}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Título, nota, id…"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  runSearchNow();
+                }
+              }}
+              placeholder="Título, conteúdo, memória, capítulo…"
             />
           </div>
-          <div style={styles.smallMuted}>Dica: ao buscar, mostramos só o estado atual (1 por memória/capítulo).</div>
+
+          <button type="button" style={styles.btn} onClick={runSearchNow}>
+            Buscar agora
+          </button>
+
+          <button
+            type="button"
+            style={styles.btnGhost}
+            onClick={() => {
+              setQuery("");
+              setDebouncedQuery("");
+              setSearchTick((v) => v + 1);
+            }}
+          >
+            Limpar
+          </button>
+        </div>
+
+        <div style={{ ...styles.smallMuted, marginTop: 8 }}>
+          A pesquisa consulta a API real por <code>q</code>, <code>type</code> e <code>limit</code>, com fallback de acervo real e contexto de capítulo.
         </div>
 
         {warnings.length > 0 && (
@@ -853,7 +1112,6 @@ export default function TimelinePage() {
         )}
       </div>
 
-      {/* Events */}
       <div style={styles.card}>
         <div style={styles.rowBetween}>
           <div>
@@ -873,7 +1131,7 @@ export default function TimelinePage() {
           </div>
         ) : loading ? (
           <div style={styles.infoBox}>Carregando eventos…</div>
-        ) : filteredEvents.length === 0 ? (
+        ) : displayEvents.length === 0 ? (
           <div style={styles.infoBox}>
             <div style={{ fontWeight: 900 }}>Nada para mostrar</div>
             <div style={{ marginTop: 6, opacity: 0.85 }}>
@@ -898,17 +1156,20 @@ export default function TimelinePage() {
                     const isOpen = Boolean(openMap[it.id]);
 
                     const target = extractTarget(it);
-                    const canOpen = Boolean(target.id) && (target.kind === "memory" || target.kind === "chapter");
+                    const navTarget = parseNavTarget(extractNav(it.raw));
+                    const effectiveTarget = navTarget.kind !== "unknown" ? navTarget : target;
+                    const kind = detectEventKind(it);
+                    const matchReasonLabel = getMatchReasonLabel(it.raw);
 
-                    const k = normalizeKind(it);
-                    const seal = labelForKind(k);
+                    const canOpen =
+                      (kind === "Memória" && effectiveTarget.kind === "memory" && Boolean(effectiveTarget.id)) ||
+                      (kind === "Capítulo" && effectiveTarget.kind === "chapter" && Boolean(effectiveTarget.id));
 
-                    const focusLabel = mapKindToFilter(k);
-
+                    const seal = labelForKind(kind);
                     const openLabel =
-                      target.kind === "memory"
+                      kind === "Memória"
                         ? "Abrir memória"
-                        : target.kind === "chapter"
+                        : kind === "Capítulo"
                         ? "Abrir capítulo"
                         : "Detalhes";
 
@@ -928,25 +1189,17 @@ export default function TimelinePage() {
                           <div style={styles.eventLeft}>
                             <div style={styles.eventMetaRow}>
                               <span style={styles.eventMeta}>
-                                {kindIcon(k)} <b>{time}</b> {rel ? <span style={{ opacity: 0.7 }}>({rel})</span> : null}
+                                {kindIcon(kind)} <b>{time}</b> {rel ? <span style={{ opacity: 0.7 }}>({rel})</span> : null}
                               </span>
 
                               <span style={styles.badgeSoftSmall}>
                                 <b>{seal}</b>
                               </span>
 
-                              {focusLabel ? (
-                                <button
-                                  type="button"
-                                  style={styles.badgeLink}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setActiveFilter(focusLabel);
-                                  }}
-                                  title="Filtrar por este tipo"
-                                >
-                                  Ver só {focusLabel.toLowerCase()}
-                                </button>
+                              {matchReasonLabel ? (
+                                <span style={styles.badgeSoftSmall}>
+                                  <b>{matchReasonLabel}</b>
+                                </span>
                               ) : null}
                             </div>
 
@@ -986,7 +1239,7 @@ export default function TimelinePage() {
                           <div style={styles.detailsBox} onClick={(e) => e.stopPropagation()}>
                             <div style={{ fontWeight: 900, marginBottom: 6 }}>Detalhes do evento</div>
                             <div style={styles.smallMuted}>
-                              target: <b>{target.kind}:{target.id ?? "—"}</b>
+                              target: <b>{effectiveTarget.kind}:{effectiveTarget.id ?? "—"}</b>
                             </div>
                             <div style={{ marginTop: 8, opacity: 0.85 }}>
                               <pre style={styles.pre}>{JSON.stringify(it.raw ?? null, null, 2)}</pre>
@@ -1003,9 +1256,8 @@ export default function TimelinePage() {
         )}
 
         <div style={styles.footerNote}>
-          Observação: esta tela <b>consome</b> <code>/timeline</code> para eventos, e consulta <b>inventário real</b> em{" "}
-          <code>/api/*</code> para os contadores (Memórias/Capítulos). Ao buscar, mostramos apenas o estado atual. A UI não
-          renderiza cards de “Versão”.
+          A tela consome <code>/api/timeline</code> com <code>q</code>, <code>type</code> e <code>limit</code>. A navegação prioriza o{" "}
+          <code>meta.nav</code> vindo do backend para evitar abrir o ID errado.
         </div>
       </div>
     </div>
@@ -1068,18 +1320,6 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.92,
     whiteSpace: "nowrap",
   },
-  badgeLink: {
-    fontSize: 11,
-    fontWeight: 900,
-    padding: "4px 8px",
-    borderRadius: 999,
-    background: "transparent",
-    border: "1px solid var(--hdud-border)",
-    color: "var(--hdud-text)",
-    opacity: 0.78,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  },
 
   btn: {
     border: "1px solid var(--hdud-border)",
@@ -1103,16 +1343,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     opacity: 0.78,
   },
-
-  diagBox: {
-    marginTop: 10,
-    border: "1px solid var(--hdud-border)",
-    background: "var(--hdud-surface-2)",
-    borderRadius: 12,
-    padding: 10,
-  },
-  diagLine: { fontSize: 12, opacity: 0.85, marginTop: 2 },
-  diagHint: { marginTop: 6, fontSize: 11, opacity: 0.62 },
 
   rowBetween: {
     display: "flex",

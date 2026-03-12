@@ -1,6 +1,6 @@
 // C:\HDUD_DATA\hdud-web-app\src\services\feed.service.ts
 
-import { apiJson } from "../api/http";
+import { apiGet } from "../lib/api";
 
 export type MemoryItem = {
   memory_id: number;
@@ -20,15 +20,17 @@ export type ChapterItem = {
   status?: string | null;
   created_at?: string;
   updated_at?: string;
+  published_at?: string;
+  current_version_id?: number | null;
   is_deleted?: boolean;
 };
 
 export type FeedSnapshot = {
   counts: {
     memoriesTotal: number;
-    versionsTotal: number; // heurística segura: soma dos version_number (ou 1)
-    rollbacksTotal: number; // ainda não existe endpoint -> placeholder
-    chaptersTotal: number; // agora: best-effort via endpoint(s) do front
+    versionsTotal: number;
+    rollbacksTotal: number;
+    chaptersTotal: number;
   };
   recentMemories: Array<{
     memory_id: number;
@@ -43,11 +45,6 @@ type ListMemoriesResponse = {
   memories: MemoryItem[];
 };
 
-type ListChaptersResponseA = {
-  author_id: number;
-  chapters: ChapterItem[];
-};
-
 function safeVersion(m: MemoryItem): number {
   const v = Number(m.version_number ?? 1);
   return Number.isFinite(v) && v > 0 ? v : 1;
@@ -59,71 +56,44 @@ function isNonDeleted(x: { is_deleted?: boolean } | null | undefined) {
 
 function normalizeChaptersPayload(data: any): ChapterItem[] {
   if (!data) return [];
-
-  // formato A: { chapters: [...] }
   if (Array.isArray(data?.chapters)) return data.chapters;
-
-  // formato B: [...] direto
   if (Array.isArray(data)) return data;
-
-  // formato C: { items: [...] }
-  if (Array.isArray(data?.items)) return data.items;
-
+  if (Array.isArray(data?.items)) return data.items; // ✅ backend /chapters => {items}
   return [];
 }
 
-export async function fetchAuthorMemories(
-  token: string,
-  authorId: number
-): Promise<MemoryItem[]> {
-  const data = await apiJson<ListMemoriesResponse>(`/authors/${authorId}/memories`, token);
-  return Array.isArray(data?.memories) ? data.memories : [];
+// Mantém best-effort (snapshot)
+export async function fetchAuthorMemories(_token: string, authorId: number): Promise<MemoryItem[]> {
+  const data = await apiGet<ListMemoriesResponse>(`/authors/${authorId}/memories`);
+  return Array.isArray((data as any)?.memories) ? (data as any).memories : [];
 }
 
 /**
- * Best-effort: tenta descobrir capítulos sem depender de contrato novo.
- * Se o endpoint não existir, retorna [] sem quebrar o Feed.
+ * ✅ Preferência total ao contrato OFICIAL:
+ * - GET /chapters (author do token)
  */
-export async function fetchAuthorChapters(
-  token: string,
-  authorId: number
-): Promise<ChapterItem[]> {
+export async function fetchAuthorChapters(_token: string, authorId: number): Promise<ChapterItem[]> {
   const attempts: Array<() => Promise<any>> = [
-    // mais provável (espelhando memórias)
-    () => apiJson<ListChaptersResponseA>(`/authors/${authorId}/chapters`, token),
+    () => apiGet<any>(`/chapters`),
 
-    // fallback comum
-    () => apiJson<any>(`/chapters?author_id=${authorId}`, token),
-
-    // fallback alternativo
-    () => apiJson<any>(`/chapters/${authorId}`, token),
+    // tentativas antigas (mantidas por compat, mas por último)
+    () => apiGet<any>(`/authors/${authorId}/chapters`),
+    () => apiGet<any>(`/chapters?author_id=${authorId}`),
+    () => apiGet<any>(`/chapters/${authorId}`),
   ];
 
   for (const run of attempts) {
     try {
       const data = await run();
-      const chapters = normalizeChaptersPayload(data).filter(isNonDeleted);
-      if (chapters.length >= 0) return chapters; // se respondeu, aceitamos (mesmo vazio)
+      return normalizeChaptersPayload(data).filter(isNonDeleted);
     } catch {
       // tenta próxima rota
     }
   }
-
   return [];
 }
 
-/**
- * Snapshot “inteligente” sem inventar lógica:
- * - memóriasTotal: quantidade de memórias não deletadas
- * - versionsTotal: soma dos version_number atuais (proxy simples de “versões registradas”)
- * - rollbacksTotal: 0 (placeholder) até existirem endpoints
- * - chaptersTotal: best-effort (passado como parâmetro)
- * - recentMemories: top 3 mais recentes
- */
-export function buildFeedSnapshot(
-  memories: MemoryItem[],
-  chaptersTotalOverride = 0
-): FeedSnapshot {
+export function buildFeedSnapshot(memories: MemoryItem[], chaptersTotalOverride = 0): FeedSnapshot {
   const alive = (memories ?? []).filter((m) => !m.is_deleted);
 
   const memoriesTotal = alive.length;
@@ -149,12 +119,7 @@ export function buildFeedSnapshot(
       : 0;
 
   return {
-    counts: {
-      memoriesTotal,
-      versionsTotal,
-      rollbacksTotal: 0,
-      chaptersTotal,
-    },
+    counts: { memoriesTotal, versionsTotal, rollbacksTotal: 0, chaptersTotal },
     recentMemories,
   };
 }
