@@ -46,6 +46,205 @@ import {
   unwrapList,
 } from "./chapters/utils";
 
+const HDUD_DASHBOARD_CHAPTER_DRAFT_KEY = "hdud_dashboard_chapter_draft";
+const HDUD_GARDEN_CHAPTER_DRAFT_KEY = "hdud_garden_chapter_draft";
+
+type DashboardDraftMemory = {
+  memory_id: number;
+  title: string;
+  preview: string;
+  atIso: string | null;
+  chapter_id: number | null;
+};
+
+type DashboardChapterDraft = {
+  source: "dashboard" | "garden";
+  created_at: string;
+  title: string;
+  description: string;
+  body: string;
+  memoryIds: number[];
+  memories: DashboardDraftMemory[];
+};
+
+type AiChapterSuggestionData = {
+  chapter_title_suggestion: string | null;
+  chapter_summary: string | null;
+  themes: string[];
+  sections: string[];
+  emotional_arc: string[];
+  confidence_score: number | null;
+};
+
+type AiChapterSuggestionMeta = {
+  suggestion_status?: string | null;
+  source_memory_count?: number | null;
+  source_snapshot?: any;
+  provider?: string | null;
+  model?: string | null;
+  prompt_version?: string | null;
+  tokens_input?: number | null;
+  tokens_output?: number | null;
+  created_at?: string | null;
+  applied_at?: string | null;
+  discarded_at?: string | null;
+  generated_at?: string | null;
+};
+
+type AiChapterSuggestion = {
+  ok: boolean;
+  status: number;
+  chapter_id: number;
+  suggestion_id: number | null;
+  data: AiChapterSuggestionData;
+  meta: AiChapterSuggestionMeta;
+};
+
+type ApplyScope = "title" | "summary" | "all";
+
+type AiApplyResponse = {
+  ok: boolean;
+  applied: boolean;
+  code?: string | null;
+  message?: string | null;
+  chapter_id: number;
+  suggestion_id: number;
+  apply_scope: ApplyScope;
+  chapter_version_id: number | null;
+  chapter?: {
+    chapter_id: number;
+    title: string;
+    description: string | null;
+    body: string;
+  } | null;
+  suggestion?: {
+    suggestion_id: number;
+    suggestion_status?: string | null;
+    applied_at?: string | null;
+  } | null;
+  changes?: {
+    title_changed: boolean;
+    body_changed: boolean;
+  } | null;
+};
+
+function normalizeAiSuggestion(raw: any): AiChapterSuggestion | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  const data = raw.data && typeof raw.data === "object" ? raw.data : {};
+  const meta = raw.meta && typeof raw.meta === "object" ? raw.meta : {};
+
+  return {
+    ok: !!raw.ok,
+    status: Number(raw.status ?? 200),
+    chapter_id: Number(raw.chapter_id ?? 0),
+    suggestion_id:
+      raw.suggestion_id != null && Number.isFinite(Number(raw.suggestion_id))
+        ? Number(raw.suggestion_id)
+        : null,
+    data: {
+      chapter_title_suggestion:
+        data.chapter_title_suggestion != null ? String(data.chapter_title_suggestion) : null,
+      chapter_summary: data.chapter_summary != null ? String(data.chapter_summary) : null,
+      themes: Array.isArray(data.themes) ? data.themes.map((x: any) => String(x)) : [],
+      sections: Array.isArray(data.sections) ? data.sections.map((x: any) => String(x)) : [],
+      emotional_arc: Array.isArray(data.emotional_arc)
+        ? data.emotional_arc.map((x: any) => String(x))
+        : [],
+      confidence_score:
+        data.confidence_score != null && Number.isFinite(Number(data.confidence_score))
+          ? Number(data.confidence_score)
+          : null,
+    },
+    meta: {
+      suggestion_status:
+        meta.suggestion_status != null ? String(meta.suggestion_status) : null,
+      source_memory_count:
+        meta.source_memory_count != null && Number.isFinite(Number(meta.source_memory_count))
+          ? Number(meta.source_memory_count)
+          : null,
+      source_snapshot: meta.source_snapshot ?? null,
+      provider: meta.provider != null ? String(meta.provider) : null,
+      model: meta.model != null ? String(meta.model) : null,
+      prompt_version: meta.prompt_version != null ? String(meta.prompt_version) : null,
+      tokens_input:
+        meta.tokens_input != null && Number.isFinite(Number(meta.tokens_input))
+          ? Number(meta.tokens_input)
+          : null,
+      tokens_output:
+        meta.tokens_output != null && Number.isFinite(Number(meta.tokens_output))
+          ? Number(meta.tokens_output)
+          : null,
+      created_at: meta.created_at != null ? String(meta.created_at) : null,
+      applied_at: meta.applied_at != null ? String(meta.applied_at) : null,
+      discarded_at: meta.discarded_at != null ? String(meta.discarded_at) : null,
+      generated_at: meta.generated_at != null ? String(meta.generated_at) : null,
+    },
+  };
+}
+
+function consumeDashboardDraft(): DashboardChapterDraft | null {
+  try {
+    const keys = [HDUD_GARDEN_CHAPTER_DRAFT_KEY, HDUD_DASHBOARD_CHAPTER_DRAFT_KEY];
+
+    let raw: string | null = null;
+    let usedKey: string | null = null;
+
+    for (const key of keys) {
+      const value = sessionStorage.getItem(key);
+      if (value) {
+        raw = value;
+        usedKey = key;
+        break;
+      }
+    }
+
+    if (!raw) return null;
+
+    keys.forEach((key) => sessionStorage.removeItem(key));
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const memories = Array.isArray(parsed.memories)
+      ? parsed.memories
+          .map((m: any) => ({
+            memory_id: Number(m?.memory_id),
+            title: String(m?.title ?? "").trim() || "Memória sem título",
+            preview: String(m?.preview ?? "").trim(),
+            atIso: m?.atIso != null ? String(m.atIso) : null,
+            chapter_id:
+              m?.chapter_id != null && Number.isFinite(Number(m.chapter_id))
+                ? Number(m.chapter_id)
+                : null,
+          }))
+          .filter((m: DashboardDraftMemory) => Number.isFinite(m.memory_id) && m.memory_id > 0)
+      : [];
+
+    const source =
+      parsed?.source === "garden" || usedKey === HDUD_GARDEN_CHAPTER_DRAFT_KEY
+        ? "garden"
+        : "dashboard";
+
+    return {
+      source,
+      created_at: parsed?.created_at ? String(parsed.created_at) : new Date().toISOString(),
+      title: String(parsed?.title ?? "").trim() || DEFAULT_NEW_TITLE,
+      description: String(parsed?.description ?? "").trim() || DEFAULT_NEW_DESCRIPTION,
+      body: String(parsed?.body ?? ""),
+      memoryIds:
+        Array.isArray(parsed?.memoryIds) && parsed.memoryIds.length
+          ? parsed.memoryIds
+              .map((x: any) => Number(x))
+              .filter((x: number) => Number.isFinite(x) && x > 0)
+          : memories.map((m: DashboardDraftMemory) => m.memory_id),
+      memories,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function ChaptersPage() {
   const token = getToken();
   const canUseApi = !!token;
@@ -112,6 +311,16 @@ export default function ChaptersPage() {
   const [linkedElsewhereMap, setLinkedElsewhereMap] = useState<Record<number, number>>({});
   const [moveLink, setMoveLink] = useState<MoveLinkState>(null);
 
+  const [aiSuggestion, setAiSuggestion] = useState<AiChapterSuggestion | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiLoadedOnce, setAiLoadedOnce] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiApplyingScope, setAiApplyingScope] = useState<ApplyScope | null>(null);
+
+  const [pendingDashboardDraftMemories, setPendingDashboardDraftMemories] = useState<
+    DashboardDraftMemory[]
+  >([]);
+
   const isDirty = useMemo(() => {
     if (loading || saving) return false;
     const snap = snapshotRef.current;
@@ -141,6 +350,41 @@ export default function ChaptersPage() {
     const diffs = diffDirty(cur, b);
     return diffs.length ? diffs.join(" | ") : "OK (no diffs)";
   }, [title, description, body, status]);
+
+  const aiCardStyle = useMemo<React.CSSProperties>(
+    () => ({
+      marginTop: 18,
+      position: "relative",
+      borderRadius: 18,
+      border: "1px solid rgba(15,23,42,0.08)",
+      background:
+        "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(250,248,242,0.98) 100%)",
+      boxShadow: "0 10px 24px rgba(15,23,42,0.08)",
+      padding: 20,
+      overflow: "hidden",
+    }),
+    []
+  );
+
+  const aiGlowStyle = useMemo<React.CSSProperties>(
+    () => ({
+      position: "absolute",
+      inset: -60,
+      background:
+        "radial-gradient(circle at top right, rgba(34,197,94,0.08), transparent 26%), radial-gradient(circle at left center, rgba(59,130,246,0.06), transparent 24%)",
+      pointerEvents: "none",
+    }),
+    []
+  );
+
+  const aiMutedStyle = useMemo<React.CSSProperties>(
+    () => ({
+      color: "rgba(15,23,42,0.68)",
+      fontSize: 13,
+      lineHeight: 1.45,
+    }),
+    []
+  );
 
   function setToastAuto(t: Toast | null, ms = 3500) {
     setToast(t);
@@ -183,6 +427,14 @@ export default function ChaptersPage() {
     return false;
   }
 
+  function resetAiSuggestionState() {
+    setAiSuggestion(null);
+    setAiError(null);
+    setAiLoading(false);
+    setAiLoadedOnce(false);
+    setAiApplyingScope(null);
+  }
+
   function goEditMode() {
     setMode("edit");
     try {
@@ -212,18 +464,24 @@ export default function ChaptersPage() {
     setPickerQ("");
     setPickerItems([]);
     setMoveLink(null);
+    setPendingDashboardDraftMemories([]);
+    resetAiSuggestionState();
   }
 
-  function openLocalNewDraft(preset?: { title: string; description?: string | null }) {
+  function openLocalNewDraft(preset?: { title: string; description?: string | null; body?: string | null }) {
     if (!confirmIfDirty("Criar novo capítulo")) return;
 
     setSelectedChapterId(null);
     setOpenChapterId(null);
     setIsNewUnsaved(true);
 
-    setTitle(preset?.title ?? DEFAULT_NEW_TITLE);
-    setDescription(String(preset?.description ?? DEFAULT_NEW_DESCRIPTION));
-    setBody("");
+    const nextTitle = preset?.title ?? DEFAULT_NEW_TITLE;
+    const nextDescription = String(preset?.description ?? DEFAULT_NEW_DESCRIPTION);
+    const nextBody = String(preset?.body ?? "");
+
+    setTitle(nextTitle);
+    setDescription(nextDescription);
+    setBody(nextBody);
     setStatus("DRAFT");
     setVersionLabel("v1");
     setCreatedAt("—");
@@ -231,9 +489,9 @@ export default function ChaptersPage() {
     setPublishedAt("—");
 
     snapshotRef.current = normSnap({
-      title: preset?.title ?? DEFAULT_NEW_TITLE,
-      description: String(preset?.description ?? DEFAULT_NEW_DESCRIPTION),
-      body: "",
+      title: nextTitle,
+      description: nextDescription,
+      body: nextBody,
       status: "DRAFT",
     });
 
@@ -244,8 +502,283 @@ export default function ChaptersPage() {
     setPickerQ("");
     setPickerItems([]);
     setMoveLink(null);
+    resetAiSuggestionState();
 
     goEditMode();
+  }
+
+  function openDashboardDraftInEditor(draft: DashboardChapterDraft) {
+    openLocalNewDraft({
+      title: draft.title || DEFAULT_NEW_TITLE,
+      description: draft.description || DEFAULT_NEW_DESCRIPTION,
+      body: draft.body || "",
+    });
+
+    setPendingDashboardDraftMemories(draft.memories || []);
+    setToastAuto(
+      {
+        kind: "ok",
+        msg:
+          draft.source === "garden"
+            ? "Draft colhido do Jardim. Revise, edite e salve apenas se gostar."
+            : "Prévia editorial carregada. Revise, edite e salve apenas se gostar.",
+      },
+      4200
+    );
+  }
+
+  async function attachPendingDraftMemoriesToChapter(chapterId: number) {
+    if (!chapterId || !pendingDashboardDraftMemories.length) {
+      return {
+        linkedCount: 0,
+        alreadyLinkedCount: 0,
+        blockedCount: 0,
+      };
+    }
+
+    let linkedCount = 0;
+    let alreadyLinkedCount = 0;
+    let blockedCount = 0;
+
+    for (const memory of pendingDashboardDraftMemories) {
+      const result = await tryMany<any>([
+        () =>
+          apiRequest<any>(`/api/chapters/${chapterId}/memories/${memory.memory_id}`, {
+            method: "POST",
+          }),
+      ]);
+
+      if (result.ok) {
+        const alreadyLinked = !!(result.data as any)?.already_linked;
+        if (alreadyLinked) alreadyLinkedCount += 1;
+        else linkedCount += 1;
+        continue;
+      }
+
+      if (isConflictAlreadyLinked(result.status, result.data)) {
+        blockedCount += 1;
+        continue;
+      }
+
+      const hint = result.status ? `HTTP ${result.status}` : "erro";
+      const msg = extractErrMsg(result.data);
+      throw new Error(
+        `Falha ao vincular memória ${memory.memory_id} ao capítulo (${hint})${msg ? ` — ${msg}` : ""}.`
+      );
+    }
+
+    setPendingDashboardDraftMemories([]);
+
+    return {
+      linkedCount,
+      alreadyLinkedCount,
+      blockedCount,
+    };
+  }
+
+  async function loadLatestAiSuggestion(chapterId: number) {
+    if (!chapterId || !Number.isFinite(chapterId)) return;
+
+    setAiLoading(true);
+    setAiError(null);
+
+    try {
+      const result = await tryMany<any>([
+        () => apiRequest<any>(`/api/chapters/${chapterId}/suggestions/latest`, { method: "GET" }),
+      ]);
+
+      setApiInfo("AI_SUGGESTION_LATEST", result.usedPath || "—", result.attempts);
+
+      if (!result.ok || !result.data) {
+        if (result.status === 404) {
+          setAiSuggestion(null);
+          setAiLoadedOnce(true);
+          setAiError(null);
+          return;
+        }
+
+        const hint = result.status ? `HTTP ${result.status}` : "erro";
+        const msg = extractErrMsg(result.data);
+        setAiSuggestion(null);
+        setAiLoadedOnce(true);
+        setAiError(`Não consegui carregar a última sugestão (${hint})${msg ? ` — ${msg}` : ""}.`);
+        return;
+      }
+
+      const normalized = normalizeAiSuggestion(result.data);
+      setAiSuggestion(normalized);
+      setAiLoadedOnce(true);
+      setAiError(null);
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  async function suggestChapterWithAi(regenerate = false) {
+    if (needAuthGuard()) return;
+    if (isNewUnsaved || !openChapterId) {
+      setToastAuto({ kind: "warn", msg: "Salve/crie o capítulo primeiro para usar a sugestão com IA." });
+      return;
+    }
+
+    setAiLoading(true);
+    setAiError(null);
+
+    try {
+      const payload = {
+        mode: "summary",
+        regenerate,
+        options: {
+          language: "pt-BR",
+          tone: "autobiografico",
+          max_sections: 6,
+          max_themes: 5,
+        },
+      };
+
+      const result = await tryMany<any>([
+        () =>
+          apiRequest<any>(`/api/chapters/${openChapterId}/suggest`, {
+            method: "POST",
+            body: JSON.stringify(payload),
+          }),
+      ]);
+
+      setApiInfo("AI_SUGGEST", result.usedPath || "—", result.attempts);
+
+      if (!result.ok || !result.data) {
+        const hint = result.status ? `HTTP ${result.status}` : "erro";
+        const msg = extractErrMsg(result.data);
+        const text = `Falha ao gerar sugestão com IA (${hint})${msg ? ` — ${msg}` : ""}.`;
+
+        setAiError(text);
+        setAiLoadedOnce(true);
+        setToastAuto({ kind: "err", msg: text }, 4800);
+        return;
+      }
+
+      const normalized = normalizeAiSuggestion(result.data);
+      setAiSuggestion(normalized);
+      setAiLoadedOnce(true);
+      setAiError(null);
+
+      setToastAuto({
+        kind: "ok",
+        msg: regenerate ? "Sugestão editorial regenerada." : "Sugestão editorial gerada com IA.",
+      });
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  async function applyAiSuggestion(scope: ApplyScope) {
+    if (needAuthGuard()) return;
+    if (isNewUnsaved || !openChapterId) {
+      setToastAuto({ kind: "warn", msg: "Salve/crie o capítulo primeiro para aplicar a sugestão." });
+      return;
+    }
+
+    const suggestionId = Number(aiSuggestion?.suggestion_id ?? 0);
+    if (!Number.isFinite(suggestionId) || suggestionId <= 0) {
+      setToastAuto({ kind: "warn", msg: "Nenhuma sugestão válida encontrada para aplicar." });
+      return;
+    }
+
+    if (!confirmIfDirty("Aplicar sugestão da IA")) return;
+
+    setAiApplyingScope(scope);
+    setAiError(null);
+
+    try {
+      const payload = {
+        apply_scope: scope,
+      };
+
+      const result = await tryMany<AiApplyResponse | any>([
+        () =>
+          apiRequest<any>(`/api/chapters/${openChapterId}/suggestions/${suggestionId}/apply`, {
+            method: "POST",
+            body: JSON.stringify(payload),
+          }),
+      ]);
+
+      setApiInfo("AI_APPLY", result.usedPath || "—", result.attempts);
+
+      if (!result.ok || !result.data) {
+        const hint = result.status ? `HTTP ${result.status}` : "erro";
+        const msg = extractErrMsg(result.data);
+        const text = `Falha ao aplicar sugestão com IA (${hint})${msg ? ` — ${msg}` : ""}.`;
+        setAiError(text);
+        setToastAuto({ kind: "err", msg: text }, 4800);
+        return;
+      }
+
+      const response = result.data as AiApplyResponse;
+      const chapterPayload = response?.chapter ?? null;
+
+      if (chapterPayload) {
+        const nextTitle = String(chapterPayload.title ?? "");
+        const nextDescription = String(chapterPayload.description ?? "");
+        const nextBody = normText(chapterPayload.body ?? "");
+
+        setTitle(nextTitle);
+        setDescription(nextDescription);
+        setBody(nextBody);
+
+        snapshotRef.current = normSnap({
+          title: nextTitle,
+          description: nextDescription,
+          body: nextBody,
+          status,
+        });
+      }
+
+      if (response?.chapter_version_id != null && Number.isFinite(Number(response.chapter_version_id))) {
+        setVersionLabel(`v${Number(response.chapter_version_id)}`);
+      }
+
+      setAiSuggestion((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          meta: {
+            ...prev.meta,
+            suggestion_status:
+              response?.suggestion?.suggestion_status ??
+              (response?.applied ? "applied" : prev.meta?.suggestion_status ?? null),
+            applied_at:
+              response?.suggestion?.applied_at ??
+              (response?.applied ? new Date().toISOString() : prev.meta?.applied_at ?? null),
+          },
+        };
+      });
+
+      if (response?.applied === false && response?.code === "NO_CHANGES_TO_APPLY") {
+        setToastAuto({
+          kind: "warn",
+          msg: "Nada novo para aplicar. O capítulo já está alinhado com essa sugestão.",
+        });
+      } else if (response?.applied) {
+        const label =
+          scope === "title"
+            ? "Título aplicado com sucesso."
+            : scope === "summary"
+            ? "Resumo aplicado com sucesso."
+            : "Título e resumo aplicados com sucesso.";
+
+        setToastAuto({ kind: "ok", msg: label });
+      } else {
+        setToastAuto({
+          kind: "warn",
+          msg: response?.message || "A operação foi concluída, mas não houve alteração editorial.",
+        });
+      }
+
+      await loadList();
+      await loadDetail(openChapterId);
+    } finally {
+      setAiApplyingScope(null);
+    }
   }
 
   async function loadList() {
@@ -259,8 +792,6 @@ export default function ChaptersPage() {
       const result = await tryMany<any>([
         () => apiRequest<any>("/api/chapters", { method: "GET" }),
         () => apiRequest<any>("/api/chapters/list", { method: "GET" }),
-        () => apiRequest<any>(`/api/authors/${authorId}/chapters`, { method: "GET" }),
-        () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "GET" }),
       ]);
 
       if (seq !== listSeqRef.current) return;
@@ -402,6 +933,7 @@ export default function ChaptersPage() {
       setSelectedChapterId(chapterId);
       setOpenChapterId(chapterId);
       setIsNewUnsaved(false);
+      setPendingDashboardDraftMemories([]);
 
       setTitle(String((d as any).title ?? ""));
       setDescription(String((d as any).description ?? ""));
@@ -442,6 +974,7 @@ export default function ChaptersPage() {
       didFocusTitle.current = false;
 
       await loadChapterMemories(chapterId);
+      await loadLatestAiSuggestion(chapterId);
       goEditMode();
     } finally {
       setLoading(false);
@@ -460,8 +993,6 @@ export default function ChaptersPage() {
 
     const result = await tryMany<any>([
       () => apiRequest<any>("/api/chapters", { method: "POST", body: JSON.stringify(postPayload) }),
-      () => apiRequest<any>(`/api/authors/${authorId}/chapters`, { method: "POST", body: JSON.stringify(postPayload) }),
-      () => apiRequest<any>(`/api/author/${authorId}/chapters`, { method: "POST", body: JSON.stringify(postPayload) }),
     ]);
 
     setApiInfo("CREATE", result.usedPath || "—", result.attempts);
@@ -595,7 +1126,7 @@ export default function ChaptersPage() {
         const cid = await createOnServer(payload);
         if (!cid) return;
 
-        setToastAuto({ kind: "ok", msg: "Capítulo salvo (criado)." });
+        const linkSummary = await attachPendingDraftMemoriesToChapter(cid);
 
         setIsNewUnsaved(false);
         setOpenChapterId(cid);
@@ -607,6 +1138,23 @@ export default function ChaptersPage() {
           body: normText(body),
           status: "DRAFT",
         });
+
+        if (
+          linkSummary.linkedCount > 0 ||
+          linkSummary.alreadyLinkedCount > 0 ||
+          linkSummary.blockedCount > 0
+        ) {
+          setToastAuto({
+            kind: linkSummary.blockedCount > 0 ? "warn" : "ok",
+            msg:
+              `Capítulo salvo (criado). ` +
+              `${linkSummary.linkedCount} vínculo(s) novo(s), ` +
+              `${linkSummary.alreadyLinkedCount} já existente(s), ` +
+              `${linkSummary.blockedCount} bloqueado(s).`,
+          }, 4600);
+        } else {
+          setToastAuto({ kind: "ok", msg: "Capítulo salvo (criado)." });
+        }
 
         await loadList();
         await loadDetail(cid);
@@ -653,7 +1201,7 @@ export default function ChaptersPage() {
         const cid = await createOnServer(payload);
         if (!cid) return;
 
-        setToastAuto({ kind: "ok", msg: "Publicado." });
+        const linkSummary = await attachPendingDraftMemoriesToChapter(cid);
 
         setIsNewUnsaved(false);
         setOpenChapterId(cid);
@@ -666,6 +1214,23 @@ export default function ChaptersPage() {
           body: normText(body),
           status: "PUBLIC",
         });
+
+        if (
+          linkSummary.linkedCount > 0 ||
+          linkSummary.alreadyLinkedCount > 0 ||
+          linkSummary.blockedCount > 0
+        ) {
+          setToastAuto({
+            kind: linkSummary.blockedCount > 0 ? "warn" : "ok",
+            msg:
+              `Publicado. ` +
+              `${linkSummary.linkedCount} vínculo(s) novo(s), ` +
+              `${linkSummary.alreadyLinkedCount} já existente(s), ` +
+              `${linkSummary.blockedCount} bloqueado(s).`,
+          }, 4600);
+        } else {
+          setToastAuto({ kind: "ok", msg: "Publicado." });
+        }
 
         await loadList();
         await loadDetail(cid);
@@ -990,6 +1555,585 @@ export default function ChaptersPage() {
     setToastAuto({ kind: "ok", msg: "Capítulo recarregado." });
   }
 
+  function renderPendingDashboardDraftCard() {
+    if (mode !== "edit" || !isNewUnsaved || !pendingDashboardDraftMemories.length) return null;
+
+    return (
+      <div
+        style={{
+          marginTop: 18,
+          borderRadius: 18,
+          border: "1px solid rgba(15,23,42,0.08)",
+          background: "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(250,248,242,0.98) 100%)",
+          boxShadow: "0 10px 24px rgba(15,23,42,0.08)",
+          padding: 20,
+        }}
+      >
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", color: "rgba(15,23,42,0.55)" }}>
+          Prévia vinda do Dashboard
+        </div>
+
+        <div style={{ marginTop: 6, fontSize: 22, fontWeight: 900, lineHeight: 1.15, color: "#0f172a" }}>
+          Memórias sugeridas para este rascunho
+        </div>
+
+        <div style={{ ...aiMutedStyle, marginTop: 8 }}>
+          Este capítulo ainda está local. Quando você salvar ou publicar, a HDUD criará o capítulo real e tentará vincular automaticamente as memórias abaixo.
+        </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            display: "flex",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          <span
+            style={{
+              borderRadius: 999,
+              padding: "7px 12px",
+              background: "#eef6ff",
+              border: "1px solid rgba(59,130,246,0.16)",
+              color: "#1d4ed8",
+              fontSize: 13,
+              fontWeight: 800,
+            }}
+          >
+            {pendingDashboardDraftMemories.length} memória(s) pendente(s)
+          </span>
+        </div>
+
+        <div
+          style={{
+            marginTop: 16,
+            display: "grid",
+            gap: 10,
+          }}
+        >
+          {pendingDashboardDraftMemories.map((m) => (
+            <div
+              key={`pending-draft-memory-${m.memory_id}`}
+              style={{
+                display: "grid",
+                gap: 6,
+                padding: "12px 14px",
+                borderRadius: 14,
+                background: "#fffefb",
+                border: "1px solid rgba(15,23,42,0.08)",
+              }}
+            >
+              <div style={{ fontWeight: 850, color: "#0f172a" }}>
+                {m.title || `Memória #${m.memory_id}`}
+              </div>
+              <div style={{ fontSize: 13, color: "rgba(15,23,42,0.72)", lineHeight: 1.45 }}>
+                {m.preview || "Sem prévia disponível."}
+              </div>
+              <div style={{ fontSize: 12, color: "rgba(15,23,42,0.58)", fontWeight: 700 }}>
+                {m.chapter_id ? `Já participa do capítulo #${m.chapter_id}` : "Ainda sem capítulo"}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderAiSuggestionCard() {
+    if (mode !== "edit") return null;
+
+    const hasSuggestion = !!aiSuggestion?.suggestion_id;
+    const sourceCount = aiSuggestion?.meta?.source_memory_count ?? chapterMemories.length ?? 0;
+    const confidence =
+      aiSuggestion?.data?.confidence_score != null
+        ? `${Math.round(Number(aiSuggestion.data.confidence_score) * 100)}%`
+        : "—";
+
+    const isApplyingTitle = aiApplyingScope === "title";
+    const isApplyingSummary = aiApplyingScope === "summary";
+    const isApplyingAll = aiApplyingScope === "all";
+    const isAiBusy = aiLoading || !!aiApplyingScope || saving || loading;
+
+    return (
+      <div style={aiCardStyle}>
+        <div style={aiGlowStyle} />
+
+        <div style={{ position: "relative", zIndex: 1 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: 1.1,
+                  textTransform: "uppercase",
+                  color: "rgba(15,23,42,0.55)",
+                }}
+              >
+                Editor assistido por IA
+              </div>
+
+              <div
+                style={{
+                  marginTop: 4,
+                  fontSize: 24,
+                  fontWeight: 900,
+                  lineHeight: 1.12,
+                  color: "#0f172a",
+                }}
+              >
+                ✨ Sugerir capítulo com IA
+              </div>
+
+              <div style={{ ...aiMutedStyle, marginTop: 8, maxWidth: 920 }}>
+                A HDUD lê as memórias vinculadas e propõe uma síntese editorial com título,
+                resumo, temas centrais e estrutura sugerida.
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => void suggestChapterWithAi(false)}
+                disabled={isAiBusy || isNewUnsaved || !openChapterId}
+                style={{
+                  border: "1px solid rgba(34,197,94,0.28)",
+                  background: "#16a34a",
+                  color: "white",
+                  borderRadius: 12,
+                  padding: "10px 14px",
+                  fontWeight: 800,
+                  cursor: isAiBusy || isNewUnsaved || !openChapterId ? "not-allowed" : "pointer",
+                  opacity: isAiBusy || isNewUnsaved || !openChapterId ? 0.72 : 1,
+                  boxShadow: "0 6px 14px rgba(22,163,74,0.18)",
+                }}
+                title="Gerar síntese editorial do capítulo"
+              >
+                {aiLoading ? "Gerando…" : "✨ Sugerir capítulo com IA"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void suggestChapterWithAi(true)}
+                disabled={isAiBusy || isNewUnsaved || !openChapterId}
+                style={{
+                  border: "1px solid rgba(15,23,42,0.12)",
+                  background: "#ffffff",
+                  color: "#0f172a",
+                  borderRadius: 12,
+                  padding: "10px 14px",
+                  fontWeight: 800,
+                  cursor: isAiBusy || isNewUnsaved || !openChapterId ? "not-allowed" : "pointer",
+                  opacity: isAiBusy || isNewUnsaved || !openChapterId ? 0.72 : 1,
+                }}
+                title="Gerar uma nova proposta editorial"
+              >
+                Gerar novamente
+              </button>
+            </div>
+          </div>
+
+          <div
+            style={{
+              marginTop: 16,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <div
+              style={{
+                borderRadius: 14,
+                padding: 14,
+                border: "1px solid rgba(15,23,42,0.08)",
+                background: "#fffdf8",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "rgba(15,23,42,0.62)", fontWeight: 700 }}>Memórias lidas</div>
+              <div style={{ marginTop: 6, fontSize: 26, fontWeight: 900, color: "#0f172a" }}>{sourceCount || "—"}</div>
+            </div>
+
+            <div
+              style={{
+                borderRadius: 14,
+                padding: 14,
+                border: "1px solid rgba(15,23,42,0.08)",
+                background: "#fffdf8",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "rgba(15,23,42,0.62)", fontWeight: 700 }}>Confiança editorial</div>
+              <div style={{ marginTop: 6, fontSize: 26, fontWeight: 900, color: "#0f172a" }}>{confidence}</div>
+            </div>
+          </div>
+
+          {aiError ? (
+            <div
+              style={{
+                marginTop: 16,
+                borderRadius: 14,
+                border: "1px solid rgba(239,68,68,0.20)",
+                background: "rgba(254,242,242,0.95)",
+                padding: 14,
+                color: "#991b1b",
+                fontWeight: 700,
+              }}
+            >
+              {aiError}
+            </div>
+          ) : null}
+
+          {!aiLoading && !hasSuggestion && aiLoadedOnce && !aiError ? (
+            <div
+              style={{
+                marginTop: 16,
+                borderRadius: 14,
+                border: "1px dashed rgba(15,23,42,0.14)",
+                background: "#fffdfa",
+                padding: 18,
+              }}
+            >
+              <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a" }}>Nenhuma sugestão gerada ainda</div>
+              <div style={{ ...aiMutedStyle, marginTop: 6 }}>
+                Quando você acionar a IA, a HDUD vai propor um título, um resumo narrativo,
+                temas centrais e uma estrutura sugerida para este capítulo.
+              </div>
+            </div>
+          ) : null}
+
+          {hasSuggestion ? (
+            <div
+              style={{
+                marginTop: 18,
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1.35fr) minmax(300px, 0.95fr)",
+                gap: 16,
+              }}
+            >
+              <div
+                style={{
+                  borderRadius: 16,
+                  padding: 20,
+                  border: "1px solid rgba(15,23,42,0.08)",
+                  background: "#fffefb",
+                }}
+              >
+                <div style={{ fontSize: 12, color: "rgba(15,23,42,0.62)", fontWeight: 800, textTransform: "uppercase" }}>
+                  Título sugerido
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontSize: 34,
+                    lineHeight: 1.08,
+                    fontWeight: 950,
+                    color: "#0f172a",
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  {aiSuggestion?.data?.chapter_title_suggestion || "—"}
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 22,
+                    fontSize: 12,
+                    color: "rgba(15,23,42,0.62)",
+                    fontWeight: 800,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Resumo narrativo
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: "16px 18px",
+                    borderRadius: 14,
+                    background: "#fcfaf4",
+                    border: "1px solid rgba(15,23,42,0.06)",
+                    fontSize: 17,
+                    lineHeight: 1.78,
+                    color: "#1e293b",
+                    whiteSpace: "pre-wrap",
+                    minHeight: 180,
+                  }}
+                >
+                  {aiSuggestion?.data?.chapter_summary || "—"}
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 16,
+                    display: "flex",
+                    gap: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => void applyAiSuggestion("title")}
+                    disabled={isAiBusy || !hasSuggestion}
+                    style={{
+                      border: "1px solid rgba(59,130,246,0.18)",
+                      background: "#eef6ff",
+                      color: "#1d4ed8",
+                      borderRadius: 12,
+                      padding: "10px 14px",
+                      fontWeight: 800,
+                      cursor: isAiBusy || !hasSuggestion ? "not-allowed" : "pointer",
+                      opacity: isAiBusy || !hasSuggestion ? 0.62 : 1,
+                    }}
+                  >
+                    {isApplyingTitle ? "Aplicando título…" : "Aplicar título"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void applyAiSuggestion("summary")}
+                    disabled={isAiBusy || !hasSuggestion}
+                    style={{
+                      border: "1px solid rgba(16,185,129,0.18)",
+                      background: "#ecfdf5",
+                      color: "#047857",
+                      borderRadius: 12,
+                      padding: "10px 14px",
+                      fontWeight: 800,
+                      cursor: isAiBusy || !hasSuggestion ? "not-allowed" : "pointer",
+                      opacity: isAiBusy || !hasSuggestion ? 0.62 : 1,
+                    }}
+                  >
+                    {isApplyingSummary ? "Aplicando resumo…" : "Aplicar resumo"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void applyAiSuggestion("all")}
+                    disabled={isAiBusy || !hasSuggestion}
+                    style={{
+                      border: "1px solid rgba(109,40,217,0.16)",
+                      background: "#f5f3ff",
+                      color: "#6d28d9",
+                      borderRadius: 12,
+                      padding: "10px 14px",
+                      fontWeight: 800,
+                      cursor: isAiBusy || !hasSuggestion ? "not-allowed" : "pointer",
+                      opacity: isAiBusy || !hasSuggestion ? 0.62 : 1,
+                    }}
+                  >
+                    {isApplyingAll ? "Aplicando tudo…" : "Aplicar tudo"}
+                  </button>
+                </div>
+
+                {(aiSuggestion?.meta?.created_at || aiSuggestion?.meta?.generated_at) && (
+                  <div
+                    style={{
+                      marginTop: 14,
+                      display: "flex",
+                      gap: 12,
+                      flexWrap: "wrap",
+                      color: "rgba(15,23,42,0.62)",
+                      fontSize: 12,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    <span>
+                      Gerado em{" "}
+                      {formatDateBR(aiSuggestion?.meta?.created_at ?? aiSuggestion?.meta?.generated_at ?? null)}
+                    </span>
+                    <span>•</span>
+                    <span>Modelo: {aiSuggestion?.meta?.model || "—"}</span>
+                    <span>•</span>
+                    <span>Prompt: {aiSuggestion?.meta?.prompt_version || "—"}</span>
+                    {aiSuggestion?.meta?.suggestion_status ? (
+                      <>
+                        <span>•</span>
+                        <span>Status: {aiSuggestion.meta.suggestion_status}</span>
+                      </>
+                    ) : null}
+                    {aiSuggestion?.meta?.applied_at ? (
+                      <>
+                        <span>•</span>
+                        <span>Aplicado em {formatDateBR(aiSuggestion.meta.applied_at)}</span>
+                      </>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gap: 16,
+                }}
+              >
+                <div
+                  style={{
+                    borderRadius: 16,
+                    padding: 18,
+                    border: "1px solid rgba(15,23,42,0.08)",
+                    background: "#fffefb",
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "rgba(15,23,42,0.62)", fontWeight: 800, textTransform: "uppercase" }}>
+                    Temas centrais
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      display: "flex",
+                      gap: 10,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    {aiSuggestion?.data?.themes?.length ? (
+                      aiSuggestion.data.themes.map((theme, idx) => (
+                        <span
+                          key={`${theme}-${idx}`}
+                          style={{
+                            borderRadius: 999,
+                            padding: "7px 12px",
+                            background: "#eef6ff",
+                            border: "1px solid rgba(59,130,246,0.16)",
+                            color: "#1d4ed8",
+                            fontSize: 13,
+                            fontWeight: 800,
+                          }}
+                        >
+                          {theme}
+                        </span>
+                      ))
+                    ) : (
+                      <span style={aiMutedStyle}>Sem temas identificados.</span>
+                    )}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    borderRadius: 16,
+                    padding: 18,
+                    border: "1px solid rgba(15,23,42,0.08)",
+                    background: "#fffefb",
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "rgba(15,23,42,0.62)", fontWeight: 800, textTransform: "uppercase" }}>
+                    Estrutura sugerida
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      display: "grid",
+                      gap: 10,
+                    }}
+                  >
+                    {aiSuggestion?.data?.sections?.length ? (
+                      aiSuggestion.data.sections.map((section, idx) => (
+                        <div
+                          key={`${section}-${idx}`}
+                          style={{
+                            display: "flex",
+                            gap: 10,
+                            alignItems: "flex-start",
+                            padding: "10px 12px",
+                            borderRadius: 12,
+                            background: "#f8fafc",
+                            border: "1px solid rgba(15,23,42,0.08)",
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: 24,
+                              height: 24,
+                              minWidth: 24,
+                              borderRadius: 999,
+                              display: "grid",
+                              placeItems: "center",
+                              background: "#ede9fe",
+                              color: "#6d28d9",
+                              fontSize: 12,
+                              fontWeight: 900,
+                            }}
+                          >
+                            {idx + 1}
+                          </div>
+                          <div style={{ lineHeight: 1.45, fontWeight: 700, color: "#0f172a" }}>{section}</div>
+                        </div>
+                      ))
+                    ) : (
+                      <span style={aiMutedStyle}>Sem seções sugeridas.</span>
+                    )}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    borderRadius: 16,
+                    padding: 18,
+                    border: "1px solid rgba(15,23,42,0.08)",
+                    background: "#fffefb",
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "rgba(15,23,42,0.62)", fontWeight: 800, textTransform: "uppercase" }}>
+                    Arco emocional
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      display: "flex",
+                      gap: 10,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    {aiSuggestion?.data?.emotional_arc?.length ? (
+                      aiSuggestion.data.emotional_arc.map((item, idx) => (
+                        <span
+                          key={`${item}-${idx}`}
+                          style={{
+                            borderRadius: 999,
+                            padding: "7px 12px",
+                            background: "#f5f3ff",
+                            border: "1px solid rgba(109,40,217,0.14)",
+                            color: "#6d28d9",
+                            fontSize: 13,
+                            fontWeight: 800,
+                          }}
+                        >
+                          {item}
+                        </span>
+                      ))
+                    ) : (
+                      <span style={aiMutedStyle}>Sem arco emocional detectado.</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   useEffect(() => {
     try {
       const ev = new CustomEvent("hdud:dirty", {
@@ -1020,8 +2164,14 @@ export default function ChaptersPage() {
       setToastAuto({ kind: "warn", msg: "Token ausente. Faça login para ver/editar capítulos." });
       return;
     }
+
+    const draft = consumeDashboardDraft();
+    if (draft) {
+      openDashboardDraftInEditor(draft);
+      return;
+    }
+
     void loadList();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canUseApi]);
 
   const viewItems = useMemo(() => {
@@ -1218,47 +2368,52 @@ export default function ChaptersPage() {
         ) : null}
 
         {mode === "edit" ? (
-          <ChapterEditorCard
-            ui={ui}
-            token={token}
-            authorId={authorId}
-            openChapterId={openChapterId}
-            isNewUnsaved={isNewUnsaved}
-            versionLabel={versionLabel}
-            status={status}
-            chapterMemories={chapterMemories}
-            loadingMemories={loadingMemories}
-            createdAt={createdAt}
-            updatedAt={updatedAt}
-            publishedAt={publishedAt}
-            toast={toast}
-            showDiag={showDiag}
-            lastApiInfo={lastApiInfo}
-            isDirty={isDirty}
-            dirtyInfo={dirtyInfo}
-            loading={loading}
-            saving={saving}
-            title={title}
-            description={description}
-            body={body}
-            didFocusTitle={didFocusTitle}
-            onTitleChange={setTitle}
-            onDescriptionChange={setDescription}
-            onBodyChange={setBody}
-            onOpenPicker={() => void openPicker()}
-            onRefreshLinks={() => {
-              if (openChapterId) void loadChapterMemories(openChapterId);
-            }}
-            onSaveDraft={() => void saveDraft()}
-            onPublish={() => void publish()}
-            onUnpublish={() => void unpublish()}
-            onReloadSelected={() => void reloadSelected()}
-            onGoListMode={goListMode}
-            onOpenMemory={handleOpenMemory}
-            onEditMemory={handleEditMemory}
-            onMoveMemory={(memoryId, dir) => void moveMemory(memoryId, dir)}
-            onRemoveMemory={(memoryId) => void handleRemoveMemory(memoryId)}
-          />
+          <>
+            <ChapterEditorCard
+              ui={ui}
+              token={token}
+              authorId={authorId}
+              openChapterId={openChapterId}
+              isNewUnsaved={isNewUnsaved}
+              versionLabel={versionLabel}
+              status={status}
+              chapterMemories={chapterMemories}
+              loadingMemories={loadingMemories}
+              createdAt={createdAt}
+              updatedAt={updatedAt}
+              publishedAt={publishedAt}
+              toast={toast}
+              showDiag={showDiag}
+              lastApiInfo={lastApiInfo}
+              isDirty={isDirty}
+              dirtyInfo={dirtyInfo}
+              loading={loading}
+              saving={saving}
+              title={title}
+              description={description}
+              body={body}
+              didFocusTitle={didFocusTitle}
+              onTitleChange={setTitle}
+              onDescriptionChange={setDescription}
+              onBodyChange={setBody}
+              onOpenPicker={() => void openPicker()}
+              onRefreshLinks={() => {
+                if (openChapterId) void loadChapterMemories(openChapterId);
+              }}
+              onSaveDraft={() => void saveDraft()}
+              onPublish={() => void publish()}
+              onUnpublish={() => void unpublish()}
+              onReloadSelected={() => void reloadSelected()}
+              onGoListMode={goListMode}
+              onOpenMemory={handleOpenMemory}
+              onEditMemory={handleEditMemory}
+              onMoveMemory={(memoryId, dir) => void moveMemory(memoryId, dir)}
+              onRemoveMemory={(memoryId) => void handleRemoveMemory(memoryId)}
+            />
+
+            {renderPendingDashboardDraftCard()}
+            {renderAiSuggestionCard()}
+          </>
         ) : null}
 
         <MemoryPickerModal

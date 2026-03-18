@@ -71,6 +71,7 @@ type IconName =
   | "chapters"
   | "memories"
   | "timeline"
+  | "network"
   | "profile"
   | "settings";
 
@@ -165,6 +166,34 @@ function Icon({ name }: { name: IconName }) {
             d="M4 6h.01M4 12h.01M4 18h.01"
             stroke="currentColor"
             strokeWidth="4"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "network":
+      return (
+        <svg {...common}>
+          <path
+            d="M8 10.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+            stroke="currentColor"
+            strokeWidth="2.2"
+          />
+          <path
+            d="M17 8.8a2.8 2.8 0 1 0 0-5.6 2.8 2.8 0 0 0 0 5.6Z"
+            stroke="currentColor"
+            strokeWidth="2.2"
+          />
+          <path
+            d="M6 20.8v-.7A4.1 4.1 0 0 1 10.1 16h3.1a4.1 4.1 0 0 1 4.1 4.1v.7"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M17.8 20.8v-.5a3.4 3.4 0 0 0-2.1-3.2"
+            stroke="currentColor"
+            strokeWidth="2.2"
             strokeLinecap="round"
           />
         </svg>
@@ -313,6 +342,7 @@ export default function AppShell({ onLogout }: Props) {
     if (p.startsWith("/chapters")) return "Capítulos";
     if (p.startsWith("/memories")) return "Memórias";
     if (p.startsWith("/timeline")) return "Timeline";
+    if (p.startsWith("/network")) return "Minha Rede";
     if (p.startsWith("/profile")) return "Perfil";
     if (p.startsWith("/settings")) return "Configurações";
     return "HDUD";
@@ -325,6 +355,7 @@ export default function AppShell({ onLogout }: Props) {
       { to: "/chapters", label: "Capítulos", icon: "chapters" as const },
       { to: "/memories", label: "Memórias", icon: "memories" as const },
       { to: "/timeline", label: "Timeline", icon: "timeline" as const },
+      { to: "/network", label: "Minha Rede", icon: "network" as const },
       { to: "/profile", label: "Perfil", icon: "profile" as const },
     ],
     []
@@ -360,7 +391,7 @@ export default function AppShell({ onLogout }: Props) {
           alignSelf: "stretch",
           display: "flex",
           flexDirection: "column",
-		  justifyContent: "space-between",
+          justifyContent: "space-between",
           alignItems: "center",
           padding: "10px 0",
           gap: 8,
@@ -417,9 +448,6 @@ export default function AppShell({ onLogout }: Props) {
               )}
             </NavLink>
           ))}
-
-          {/* Spacer: fixa Configurações + Sair colados no rodapé */}
-
 
           <div
             style={{

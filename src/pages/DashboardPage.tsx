@@ -1,4 +1,4 @@
-﻿/* C:\HDUD_DATA\hdud-web-app\src\pages\DashboardPage.tsx */
+﻿// C:\HDUD_DATA\hdud-web-app\src\pages\DashboardPage.tsx
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -90,6 +90,53 @@ function computeInitialsFromName(name?: string | null): string {
   return `${first}${last}`.toUpperCase() || "AN";
 }
 
+function useViewportHeight() {
+  const [vh, setVh] = useState<number>(() => {
+    if (typeof window === "undefined") return 900;
+    return window.innerHeight || 900;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onResize = () => setVh(window.innerHeight || 900);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  return vh;
+}
+
+// ============================
+// Dashboard draft handoff
+// ============================
+const HDUD_DASHBOARD_CHAPTER_DRAFT_KEY = "hdud_dashboard_chapter_draft";
+
+type DashboardDraftMemory = {
+  memory_id: number;
+  title: string;
+  preview: string;
+  atIso: string | null;
+  chapter_id: number | null;
+};
+
+type DashboardChapterDraft = {
+  source: "dashboard";
+  created_at: string;
+  title: string;
+  description: string;
+  body: string;
+  memoryIds: number[];
+  memories: DashboardDraftMemory[];
+};
+
+function persistDashboardDraft(draft: DashboardChapterDraft) {
+  try {
+    sessionStorage.setItem(HDUD_DASHBOARD_CHAPTER_DRAFT_KEY, JSON.stringify(draft));
+  } catch {}
+}
+
 // ============================
 // Seed (Demo) — Multi-Authors
 // ============================
@@ -156,7 +203,101 @@ type FeedItem = {
   };
 };
 
-type FeedResponse = { profile?: any; items?: FeedItem[]; meta?: any };
+type FeedResponse = {
+  version?: string;
+  profile?: any;
+  items?: FeedItem[];
+  legacy?: {
+    profile?: any;
+    items?: FeedItem[];
+  };
+  meta?: any;
+};
+
+function normalizeDashboardFeedItems(payload: FeedResponse | null | undefined): FeedItem[] {
+  if (Array.isArray(payload?.legacy?.items)) return payload.legacy.items;
+  if (Array.isArray(payload?.items)) return payload.items;
+  return [];
+}
+
+type SuggestionMemoryCandidate = {
+  memory_id: number;
+  title: string;
+  preview: string;
+  atIso: string | null;
+  chapter_id: number | null;
+};
+
+type ChapterSuggestionPreview = {
+  title: string;
+  description: string;
+  body: string;
+  memoryIds: number[];
+  memoryCount: number;
+};
+
+// ============================
+// Suggestion helpers
+// ============================
+function normalizeTitleForSuggestion(title: string): string {
+  const t = String(title || "").trim();
+  return t || "Memória sem título";
+}
+
+function buildChapterSuggestionFromMemories(
+  memories: SuggestionMemoryCandidate[]
+): ChapterSuggestionPreview | null {
+  if (!memories.length) return null;
+
+  const ordered = [...memories].sort((a, b) => {
+    const am = safeDateMs(a.atIso) ?? 0;
+    const bm = safeDateMs(b.atIso) ?? 0;
+    return am - bm;
+  });
+
+  const first = ordered[0];
+  const last = ordered[ordered.length - 1];
+
+  const title =
+    ordered.length === 1
+      ? `Capítulo: ${normalizeTitleForSuggestion(first.title)}`
+      : ordered.length === 2
+      ? `Capítulo: ${normalizeTitleForSuggestion(first.title)} e ${normalizeTitleForSuggestion(last.title)}`
+      : `Capítulo: ${normalizeTitleForSuggestion(first.title)} e outros marcos`;
+
+  const description =
+    ordered.length === 1
+      ? "Capítulo sugerido a partir de 1 memória selecionada."
+      : `Capítulo sugerido a partir de ${ordered.length} memórias selecionadas.`;
+
+  const intro =
+    ordered.length === 1
+      ? "Este capítulo nasce de uma memória central que merece ganhar contexto, profundidade e permanência narrativa."
+      : "Este capítulo nasce da reunião de memórias que, juntas, formam um mesmo arco narrativo e revelam uma passagem importante da trajetória do autor.";
+
+  const moments = ordered
+    .slice(0, 6)
+    .map((m, idx) => {
+      const fragment = clampText(m.preview || "Registro sem prévia disponível.", 180);
+      return `${idx + 1}. ${normalizeTitleForSuggestion(m.title)}\n${fragment}`;
+    })
+    .join("\n\n");
+
+  const closing =
+    ordered.length >= 3
+      ? "Ao serem lidas em sequência, essas memórias deixam de ser registros isolados e passam a compor um capítulo com unidade, direção e sentido."
+      : "Mesmo em número reduzido, essas memórias já sustentam um capítulo com começo emocional e potencial claro de expansão.";
+
+  const body = [intro, moments, closing].filter(Boolean).join("\n\n");
+
+  return {
+    title,
+    description,
+    body,
+    memoryIds: ordered.map((m) => m.memory_id),
+    memoryCount: ordered.length,
+  };
+}
 
 // ============================
 // UI helpers (token-first)
@@ -323,7 +464,6 @@ function ActionIcon({ name }: { name: "like" | "comment" | "repost" | "save" }) 
     );
   }
 
-  // like
   return (
     <svg {...common} aria-hidden>
       <path
@@ -342,6 +482,7 @@ function ActionIcon({ name }: { name: "like" | "comment" | "repost" | "save" }) 
 export default function DashboardPage() {
   const navigate = useNavigate();
   const isWide = useIsWide(1100);
+  const viewportHeight = useViewportHeight();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -350,6 +491,10 @@ export default function DashboardPage() {
   const [me, setMe] = useState<MeProfile | null>(null);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [feedMode, setFeedMode] = useState<"top" | "recent">("top");
+
+  const [suggestionSelectedIds, setSuggestionSelectedIds] = useState<number[]>([]);
+  const [suggestionNotice, setSuggestionNotice] = useState<string | null>(null);
+  const [creatingSuggestedChapter, setCreatingSuggestedChapter] = useState(false);
 
   const seqRef = useRef(0);
 
@@ -405,7 +550,6 @@ export default function DashboardPage() {
     if (mode === "initial") setLoading(true);
     else setRefreshing(true);
 
-    // timeout hard (evita “pendurar/cancelar” no DevTools e confundir o diagnóstico)
     const ctrl = new AbortController();
     const timeoutMs = 12_000;
     const to = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -419,13 +563,11 @@ export default function DashboardPage() {
         return (await r.json()) as MeProfile;
       });
 
-      // ✅ FIX: usa contrato novo (v=0.1) e mantém o Dashboard independente do FeedPage
       const pFeed = fetch(`${base}/feed?v=0.1&limit=24`, { headers, signal: ctrl.signal }).then(async (r) => {
         if (!r.ok) throw new Error(`Falha ao carregar feed (HTTP ${r.status}).`);
         return (await r.json()) as FeedResponse;
       });
 
-      // Não “mata” o dashboard se um endpoint falhar.
       const [meSet, feedSet] = await Promise.allSettled([pMe, pFeed]);
       if (seq !== seqRef.current) return;
 
@@ -433,7 +575,6 @@ export default function DashboardPage() {
         const meRes = meSet.value;
         setMe(meRes);
 
-        // ✅ sincroniza AppShell (foto/bio sempre)
         try {
           const name = String(meRes?.name_public ?? "").trim() || "Autor";
           const bio = String(meRes?.bio_short ?? "").trim() || "HDUD";
@@ -454,10 +595,10 @@ export default function DashboardPage() {
 
       if (feedSet.status === "fulfilled") {
         const feedRes = feedSet.value;
-        setFeed(Array.isArray(feedRes?.items) ? feedRes.items : []);
+        const normalizedItems = normalizeDashboardFeedItems(feedRes);
+        setFeed(normalizedItems);
       } else {
         setFeed([]);
-        // Se perfil veio mas feed falhou, mostra erro suave (não derruba tudo)
         if (meSet.status === "fulfilled") {
           setError(feedSet.reason?.message || "Falha ao carregar o feed.");
         } else {
@@ -466,7 +607,10 @@ export default function DashboardPage() {
       }
     } catch (e: any) {
       if (seq !== seqRef.current) return;
-      const msg = e?.name === "AbortError" ? "Timeout ao carregar seu universo. Tente novamente." : e?.message || "Falha ao carregar seu universo.";
+      const msg =
+        e?.name === "AbortError"
+          ? "Timeout ao carregar seu universo. Tente novamente."
+          : e?.message || "Falha ao carregar seu universo.";
       setError(msg);
       setMe(null);
       setFeed([]);
@@ -481,7 +625,6 @@ export default function DashboardPage() {
 
   useEffect(() => {
     void load("initial");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const displayName = useMemo(() => {
@@ -494,6 +637,144 @@ export default function DashboardPage() {
 
   const chaptersTop5 = useMemo(() => feed.filter((x) => x.type === "chapter").slice(0, 5), [feed]);
   const memoriesTop5 = useMemo(() => feed.filter((x) => x.type === "memory").slice(0, 5), [feed]);
+
+  const suggestionCandidates = useMemo<SuggestionMemoryCandidate[]>(() => {
+    const memories = feed
+      .filter((x) => x.type === "memory")
+      .map((x) => {
+        const memoryId = Number(x.source_id);
+        if (!Number.isFinite(memoryId) || memoryId <= 0) return null;
+
+        return {
+          memory_id: memoryId,
+          title: String(x.title || "").trim() || "Memória sem título",
+          preview: firstHumanFragment(x?.meta?.preview || "") || "Registro sem prévia disponível.",
+          atIso: x?.meta?.activity_at || x.date || null,
+          chapter_id:
+            x?.meta?.chapter_id != null && Number.isFinite(Number(x.meta.chapter_id))
+              ? Number(x.meta.chapter_id)
+              : null,
+        } as SuggestionMemoryCandidate;
+      })
+      .filter(Boolean) as SuggestionMemoryCandidate[];
+
+    const sortDesc = (a: SuggestionMemoryCandidate, b: SuggestionMemoryCandidate) => {
+      const am = safeDateMs(a.atIso) ?? 0;
+      const bm = safeDateMs(b.atIso) ?? 0;
+      return bm - am;
+    };
+
+    const unlinked = memories.filter((m) => !m.chapter_id).sort(sortDesc);
+    const linked = memories.filter((m) => !!m.chapter_id).sort(sortDesc);
+
+    return [...unlinked, ...linked];
+  }, [feed]);
+
+  useEffect(() => {
+    const availableIds = new Set(suggestionCandidates.map((x) => x.memory_id));
+
+    setSuggestionSelectedIds((prev) => {
+      const kept = prev.filter((id) => availableIds.has(id));
+      if (kept.length >= 2) return kept;
+
+      const preferred = suggestionCandidates.filter((x) => !x.chapter_id).slice(0, 3);
+      const fallback = suggestionCandidates.slice(0, 3);
+      const initial = (preferred.length >= 2 ? preferred : fallback).map((x) => x.memory_id);
+
+      return initial;
+    });
+  }, [suggestionCandidates]);
+
+  const selectedSuggestionMemories = useMemo(() => {
+    const selected = new Set(suggestionSelectedIds);
+    return suggestionCandidates.filter((x) => selected.has(x.memory_id));
+  }, [suggestionCandidates, suggestionSelectedIds]);
+
+  const selectedSuggestionLinkedCount = useMemo(() => {
+    return selectedSuggestionMemories.filter((x) => !!x.chapter_id).length;
+  }, [selectedSuggestionMemories]);
+
+  const selectedSuggestionFreeCount = useMemo(() => {
+    return selectedSuggestionMemories.filter((x) => !x.chapter_id).length;
+  }, [selectedSuggestionMemories]);
+
+  const chapterSuggestion = useMemo(() => {
+    return buildChapterSuggestionFromMemories(selectedSuggestionMemories);
+  }, [selectedSuggestionMemories]);
+
+  const suggestionCanCreate = useMemo(() => {
+    if (!chapterSuggestion) return false;
+    if (chapterSuggestion.memoryCount < 2) return false;
+    return true;
+  }, [chapterSuggestion]);
+
+  function toggleSuggestionMemory(memoryId: number) {
+    setSuggestionNotice(null);
+    setSuggestionSelectedIds((prev) => {
+      if (prev.includes(memoryId)) return prev.filter((id) => id !== memoryId);
+      return [...prev, memoryId];
+    });
+  }
+
+  async function createSuggestedChapter() {
+    const token = getAnyToken();
+    if (!token) {
+      setSuggestionNotice("Sessão inválida. Faça login novamente.");
+      return;
+    }
+
+    if (!chapterSuggestion) {
+      setSuggestionNotice("Selecione memórias para gerar a sugestão.");
+      return;
+    }
+
+    if (chapterSuggestion.memoryCount < 2) {
+      setSuggestionNotice("Selecione pelo menos 2 memórias para formar um capítulo sugerido.");
+      return;
+    }
+
+    const selectedMemories = selectedSuggestionMemories;
+    if (!selectedMemories.length) {
+      setSuggestionNotice("Nenhuma memória selecionada.");
+      return;
+    }
+
+    setCreatingSuggestedChapter(true);
+    setSuggestionNotice(null);
+
+    try {
+      const draft: DashboardChapterDraft = {
+        source: "dashboard",
+        created_at: new Date().toISOString(),
+        title: chapterSuggestion.title,
+        description: chapterSuggestion.description,
+        body: chapterSuggestion.body,
+        memoryIds: selectedMemories.map((x) => x.memory_id),
+        memories: selectedMemories.map((x) => ({
+          memory_id: x.memory_id,
+          title: x.title,
+          preview: x.preview,
+          atIso: x.atIso,
+          chapter_id: x.chapter_id,
+        })),
+      };
+
+      persistDashboardDraft(draft);
+
+      try {
+        sessionStorage.setItem(
+          "hdud_chapters_notice",
+          "Prévia editorial enviada para o editor. Revise e salve apenas se gostar."
+        );
+      } catch {}
+
+      navigate("/chapters");
+    } catch (e: any) {
+      setSuggestionNotice(e?.message || "Falha ao preparar a prévia do capítulo.");
+    } finally {
+      setCreatingSuggestedChapter(false);
+    }
+  }
 
   const pulse = useMemo(() => {
     const now = Date.now();
@@ -541,8 +822,6 @@ export default function DashboardPage() {
     href: string;
     emphasis?: "featured" | "normal";
     socialHint?: string;
-
-    // LinkedIn-ish metrics (deterministic)
     likes?: number;
     comments?: number;
     reposts?: number;
@@ -572,7 +851,8 @@ export default function DashboardPage() {
     const verbs = ["publicou", "atualizou"];
     const reactions = ["curtiu isso", "comentou", "repostou", "salvou"];
 
-    const pickPerson = (key: string, salt = 0) => pickDeterministic(peoplePool, hashStr(key) + salt) || "Alguém";
+    const pickPerson = (key: string, salt = 0) =>
+      pickDeterministic(peoplePool, hashStr(key) + salt) || "Alguém";
 
     const actionFor = (it: FeedItem) => {
       if (it.type === "chapter") return "atualizou";
@@ -590,13 +870,10 @@ export default function DashboardPage() {
 
     const metricsFor = (key: string) => {
       const h = Math.abs(hashStr(key));
-      // ranges “realistas” tipo LinkedIn
       const likes = clampInt((h % 120) + 3, 0, 999);
       const comments = clampInt(((h >> 3) % 14), 0, 99);
       const reposts = clampInt(((h >> 6) % 9), 0, 99);
       const saves = clampInt(((h >> 9) % 17), 0, 99);
-
-      // score: peso likes + comments + reposts + saves
       const score = likes * 1 + comments * 3 + reposts * 4 + saves * 2;
       return { likes, comments, reposts, saves, score };
     };
@@ -606,7 +883,9 @@ export default function DashboardPage() {
       const frag =
         firstHumanFragment(it?.meta?.preview || "") ||
         firstHumanFragment((it as any)?.content || "") ||
-        (it.type === "chapter" ? "Um mapa da vida em construção." : "Ainda não sei como dizer. Mesmo assim…");
+        (it.type === "chapter"
+          ? "Um mapa da vida em construção."
+          : "Ainda não sei como dizer. Mesmo assim…");
 
       const href =
         it?.meta?.nav ||
@@ -614,7 +893,8 @@ export default function DashboardPage() {
 
       const atIso = it?.meta?.activity_at || it?.date || null;
 
-      const actor = String(it?.meta?.author_name || it?.meta?.author || "").trim() || displayName || "Autor";
+      const actor =
+        String(it?.meta?.author_name || it?.meta?.author || "").trim() || displayName || "Autor";
       const action = actionFor(it);
 
       const key = `${it.type}-${it.source_id}-${title}`;
@@ -671,7 +951,9 @@ export default function DashboardPage() {
       return x;
     });
 
-    if (!out.some((x) => x.emphasis === "featured") && out[0]) out[0] = { ...out[0], emphasis: "featured" };
+    if (!out.some((x) => x.emphasis === "featured") && out[0]) {
+      out[0] = { ...out[0], emphasis: "featured" };
+    }
 
     return out.slice(0, 18);
   }, [feed, displayName, pulse.featured]);
@@ -688,7 +970,6 @@ export default function DashboardPage() {
       return arr;
     }
 
-    // top: destaque + score
     arr.sort((a, b) => {
       const aFeat = a.emphasis === "featured" ? 1 : 0;
       const bFeat = b.emphasis === "featured" ? 1 : 0;
@@ -714,9 +995,6 @@ export default function DashboardPage() {
     return "A noite guarda confissões.";
   }, [dayBand]);
 
-  // ============================
-  // Styles (LinkedIn-ish: centro manda, topo discreto)
-  // ============================
   const styles = useMemo(() => {
     return `
       @keyframes hdudPulseBreath {
@@ -766,6 +1044,47 @@ export default function DashboardPage() {
       .hdud-actions { display:flex; gap: 8px; align-items:center; flex-wrap: wrap; margin-top: 10px; }
       .hdud-action-btn { display:inline-flex; align-items:center; gap: 8px; padding: 8px 10px; border-radius: 12px; border: 1px solid transparent; background: transparent; font-weight: 900; font-size: 12px; opacity: 0.86; cursor: pointer; }
       .hdud-action-btn:hover { background: var(--hdud-hover); border-color: var(--hdud-border); opacity: 1; }
+
+      .hdud-suggestion-memory {
+        width: 100%;
+        border: 1px solid var(--hdud-border);
+        background: var(--hdud-surface);
+        border-radius: 14px;
+        padding: 10px;
+        text-align: left;
+        transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+      }
+      .hdud-suggestion-memory:hover {
+        border-color: var(--hdud-dash-hover-border);
+        box-shadow: var(--hdud-shadow-1);
+        transform: translateY(-1px);
+      }
+      .hdud-suggestion-memory[data-active="true"] {
+        border-color: var(--hdud-accent-border);
+        background: color-mix(in srgb, var(--hdud-surface) 86%, var(--hdud-accent-bg));
+      }
+
+      .hdud-right-rail-scroll {
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding-right: 4px;
+      }
+
+      .hdud-right-rail-scroll::-webkit-scrollbar,
+      .hdud-suggestion-list-scroll::-webkit-scrollbar {
+        width: 10px;
+      }
+
+      .hdud-right-rail-scroll::-webkit-scrollbar-thumb,
+      .hdud-suggestion-list-scroll::-webkit-scrollbar-thumb {
+        background: color-mix(in srgb, var(--hdud-border) 84%, transparent);
+        border-radius: 999px;
+      }
+
+      .hdud-right-rail-scroll::-webkit-scrollbar-track,
+      .hdud-suggestion-list-scroll::-webkit-scrollbar-track {
+        background: transparent;
+      }
     `;
   }, []);
 
@@ -796,7 +1115,6 @@ export default function DashboardPage() {
     background: "transparent",
   };
 
-  // mais “LinkedIn”: centro um pouco mais estreito/limpo
   const containerStyle: React.CSSProperties = {
     width: "100%",
     maxWidth: 1460,
@@ -820,11 +1138,34 @@ export default function DashboardPage() {
         marginTop: 12,
       };
 
+  const rightRailTopOffset = 12;
+  const rightRailBottomGap = 12;
+  const rightRailHeight = Math.max(360, viewportHeight - rightRailTopOffset - rightRailBottomGap);
+
   const rightStageStyle: React.CSSProperties = isWide
-    ? { position: "sticky", top: 12, alignSelf: "start" }
+    ? {
+        position: "sticky",
+        top: rightRailTopOffset,
+        alignSelf: "start",
+      }
     : { position: "static" };
 
-  // Epicentro (compact bar)
+  const rightRailInnerStyle: React.CSSProperties = isWide
+    ? {
+        display: "grid",
+        gap: 12,
+        height: rightRailHeight,
+        overflowY: "auto",
+        overflowX: "hidden",
+        paddingRight: 4,
+      }
+    : {
+        display: "grid",
+        gap: 12,
+      };
+
+  const suggestionListMaxHeight = isWide ? Math.max(220, rightRailHeight - 410) : 320;
+
   const epicentroBar: React.CSSProperties = {
     border: "1px solid var(--hdud-border)",
     background: "var(--hdud-card)",
@@ -852,7 +1193,6 @@ export default function DashboardPage() {
     background: "color-mix(in srgb, var(--hdud-surface-2) 94%, transparent)",
   };
 
-  // Composer
   const composerWrapStyle: React.CSSProperties = {
     marginTop: 12,
     border: "1px solid var(--hdud-border)",
@@ -963,7 +1303,6 @@ export default function DashboardPage() {
       "Governança de identidade",
       "Como transformar histórias em legado",
     ];
-    // determinístico por dia
     const k = Math.abs(hashStr(dayBand));
     const arr = [...base];
     for (let i = arr.length - 1; i > 0; i--) {
@@ -983,9 +1322,7 @@ export default function DashboardPage() {
 
       <div className="hdud-container hdud-container-dashboard" style={containerStyle}>
         <div style={stageGridStyle}>
-          {/* CENTER */}
           <div style={{ minWidth: 0 }}>
-            {/* EPICENTRO (compact, não rouba palco) */}
             <section style={epicentroBar} aria-label="Epicentro ao vivo">
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", minWidth: 0 }}>
                 <div style={{ ...pill, letterSpacing: 0.6, textTransform: "uppercase" }} title="Modo Epicentro">
@@ -1048,7 +1385,6 @@ export default function DashboardPage() {
               </div>
             </section>
 
-            {/* COMPOSER (rei do centro) */}
             <section style={{ minWidth: 0 }}>
               <div style={composerWrapStyle}>
                 <div style={composerTopRowStyle}>
@@ -1083,7 +1419,12 @@ export default function DashboardPage() {
                     )}
                   </div>
 
-                  <button className="hdud-btn hdud-composer-input" style={composerInputStyle} onClick={() => goMemories("text")} title="Começar publicação">
+                  <button
+                    className="hdud-btn hdud-composer-input"
+                    style={composerInputStyle}
+                    onClick={() => goMemories("text")}
+                    title="Começar publicação"
+                  >
                     Começar publicação
                   </button>
                 </div>
@@ -1120,7 +1461,6 @@ export default function DashboardPage() {
                 </div>
               ) : null}
 
-              {/* FEED */}
               <div
                 className="hdud-card"
                 style={{
@@ -1229,14 +1569,12 @@ export default function DashboardPage() {
                             {clampText(it.fragment, isFeatured ? 240 : 170)}
                           </div>
 
-                          {/* linha social (LinkedIn vibe) */}
                           {it.socialHint ? (
                             <div style={{ marginTop: 10, fontSize: 12, opacity: 0.74, fontWeight: 750 }}>
                               {it.socialHint}
                             </div>
                           ) : null}
 
-                          {/* métricas */}
                           <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                             <div style={{ fontSize: 12, opacity: 0.76, fontWeight: 850 }}>
                               👍 {likes} • 💬 {comments} • ↻ {reposts} • 🔖 {saves}
@@ -1249,7 +1587,6 @@ export default function DashboardPage() {
 
                           <div style={{ marginTop: 10 }} className="hdud-subtle-divider" />
 
-                          {/* ações (não navegam) */}
                           <div className="hdud-actions" aria-label="Ações do post">
                             <button
                               type="button"
@@ -1320,7 +1657,6 @@ export default function DashboardPage() {
                   Isto não é “conteúdo”. É registro.
                 </div>
 
-                {/* Mantém o componente “vivo”, mas agora como “rodapé” e não protagonista */}
                 <div style={{ marginTop: 12, opacity: 0.92 }}>
                   <LivingEcosystem stories={seedStories()} />
                 </div>
@@ -1328,9 +1664,204 @@ export default function DashboardPage() {
             </section>
           </div>
 
-          {/* RIGHT */}
           <aside style={rightStageStyle}>
-            <div style={{ display: "grid", gap: 12 }}>
+            <div style={rightRailInnerStyle} className={isWide ? "hdud-right-rail-scroll" : undefined}>
+              <div style={miniCard} className="hdud-mini-card">
+                <div style={{ fontWeight: 950, fontSize: 12, letterSpacing: 0.9, textTransform: "uppercase", opacity: 0.92 }}>
+                  Capítulo sugerido por IA
+                </div>
+                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.78, fontWeight: 750 }}>
+                  Selecione memórias, visualize a sugestão e envie para o editor antes de salvar.
+                </div>
+
+                <div style={{ marginTop: 12 }} className="hdud-subtle-divider" />
+
+                <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <div style={pill}>{selectedSuggestionMemories.length} memórias selecionadas</div>
+                  <div style={pill}>{selectedSuggestionLinkedCount} já vinculadas</div>
+                  <div style={pill}>{selectedSuggestionFreeCount} livres</div>
+                </div>
+
+                <div
+                  className="hdud-suggestion-list-scroll"
+                  style={{
+                    marginTop: 12,
+                    display: "grid",
+                    gap: 8,
+                    maxHeight: suggestionListMaxHeight,
+                    overflowY: "auto",
+                    overflowX: "hidden",
+                    paddingRight: 4,
+                  }}
+                >
+                  {suggestionCandidates.length ? (
+                    suggestionCandidates.map((m) => {
+                      const active = suggestionSelectedIds.includes(m.memory_id);
+                      const linked = !!m.chapter_id;
+
+                      return (
+                        <button
+                          key={`suggestion-memory-${m.memory_id}`}
+                          type="button"
+                          className="hdud-suggestion-memory"
+                          data-active={active ? "true" : "false"}
+                          onClick={() => toggleSuggestionMemory(m.memory_id)}
+                          title={linked ? "Memória já vinculada a outro capítulo, mas pode participar deste também" : "Selecionar memória"}
+                        >
+                          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                            <div
+                              style={{
+                                width: 18,
+                                height: 18,
+                                borderRadius: 6,
+                                border: "1px solid var(--hdud-border)",
+                                background: active ? "var(--hdud-accent-bg)" : "var(--hdud-card)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontSize: 11,
+                                fontWeight: 900,
+                                flex: "0 0 auto",
+                                marginTop: 1,
+                              }}
+                            >
+                              {active ? "✓" : ""}
+                            </div>
+
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontWeight: 900, fontSize: 12, lineHeight: 1.25 }}>
+                                {clampText(m.title, 70)}
+                              </div>
+                              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.78, fontWeight: 750, lineHeight: 1.35 }}>
+                                {clampText(m.preview, 110)}
+                              </div>
+                              <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 11, opacity: 0.68, fontWeight: 800 }}>
+                                  {formatRelative(m.atIso)}
+                                </span>
+                                {linked ? (
+                                  <span style={{ fontSize: 11, opacity: 0.78, fontWeight: 900 }}>
+                                    já participa do capítulo #{m.chapter_id}
+                                  </span>
+                                ) : (
+                                  <span style={{ fontSize: 11, opacity: 0.78, fontWeight: 900 }}>
+                                    ainda sem capítulo
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div style={{ padding: 12, borderRadius: 14, border: "1px dashed var(--hdud-border)", opacity: 0.9 }}>
+                      <div style={{ fontWeight: 980, marginBottom: 8 }}>Ainda não há memórias para agrupar.</div>
+                      <button className="hdud-btn hdud-btn-primary" onClick={() => navigate("/memories")}>
+                        Registrar memórias
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginTop: 14 }} className="hdud-subtle-divider" />
+
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontWeight: 900, fontSize: 12, opacity: 0.92 }}>Prévia da sugestão</div>
+
+                  {chapterSuggestion ? (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        border: "1px solid var(--hdud-border)",
+                        borderRadius: 14,
+                        background: "var(--hdud-surface)",
+                        padding: 12,
+                      }}
+                    >
+                      <div style={{ fontWeight: 950, fontSize: 13, lineHeight: 1.25 }}>
+                        {chapterSuggestion.title}
+                      </div>
+
+                      <div style={{ marginTop: 8, fontSize: 12, opacity: 0.82, fontWeight: 750, lineHeight: 1.4 }}>
+                        {chapterSuggestion.description}
+                      </div>
+
+                      <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8, fontWeight: 750, lineHeight: 1.45, whiteSpace: "pre-line" }}>
+                        {clampText(chapterSuggestion.body, 420)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: 12,
+                        borderRadius: 14,
+                        border: "1px dashed var(--hdud-border)",
+                        opacity: 0.88,
+                      }}
+                    >
+                      Selecione memórias para montar a sugestão.
+                    </div>
+                  )}
+                </div>
+
+                {suggestionNotice ? (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      borderRadius: 12,
+                      padding: "10px 12px",
+                      border: "1px solid var(--hdud-warn-border)",
+                      background: "color-mix(in srgb, var(--hdud-card) 90%, var(--hdud-warn-bg))",
+                      fontSize: 12,
+                      fontWeight: 800,
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    {suggestionNotice}
+                  </div>
+                ) : null}
+
+                <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+                  <button
+                    className="hdud-btn hdud-btn-primary"
+                    onClick={() => void createSuggestedChapter()}
+                    disabled={!suggestionCanCreate || creatingSuggestedChapter}
+                    style={{
+                      width: "100%",
+                      borderRadius: 14,
+                      padding: "10px 12px",
+                      fontWeight: 900,
+                      opacity: !suggestionCanCreate || creatingSuggestedChapter ? 0.7 : 1,
+                    }}
+                    title="Enviar prévia para o editor"
+                  >
+                    {creatingSuggestedChapter ? "Abrindo editor…" : "Levar para editor"}
+                  </button>
+
+                  <button
+                    className="hdud-btn"
+                    onClick={goChapters}
+                    style={{
+                      width: "100%",
+                      borderRadius: 14,
+                      padding: "10px 12px",
+                      fontWeight: 900,
+                      background: "var(--hdud-surface-2)",
+                      border: "1px solid var(--hdud-border)",
+                    }}
+                    title="Abrir área de capítulos"
+                  >
+                    Ir para capítulos
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 11, opacity: 0.72, fontWeight: 750, lineHeight: 1.4 }}>
+                  O Dashboard prepara a prévia editorial e envia para o editor. O capítulo só será salvo no banco quando o usuário decidir.
+                </div>
+              </div>
+
               <div style={miniCard} className="hdud-mini-card">
                 <div style={{ fontWeight: 950, fontSize: 12, letterSpacing: 0.9, textTransform: "uppercase", opacity: 0.92 }}>
                   Biblioteca rápida
@@ -1369,7 +1900,9 @@ export default function DashboardPage() {
                           <div style={{ fontWeight: 850, fontSize: 12, lineHeight: 1.2 }}>
                             {clampText(m.title, 70) || "(Memória sem título)"}
                           </div>
-                          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.78, fontWeight: 750 }}>{formatRelative(m.date)}</div>
+                          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.78, fontWeight: 750 }}>
+                            {formatRelative(m.date)}
+                          </div>
                         </button>
                       ))
                     ) : (
@@ -1412,7 +1945,9 @@ export default function DashboardPage() {
                           <div style={{ fontWeight: 850, fontSize: 12, lineHeight: 1.2 }}>
                             {clampText(c.title, 70) || "(Capítulo sem título)"}
                           </div>
-                          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.78, fontWeight: 750 }}>{formatRelative(c.date)}</div>
+                          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.78, fontWeight: 750 }}>
+                            {formatRelative(c.date)}
+                          </div>
                         </button>
                       ))
                     ) : (
@@ -1427,7 +1962,6 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* NOTÍCIAS (LinkedIn-ish) */}
               <div style={miniCard} className="hdud-mini-card">
                 <div style={{ fontWeight: 950, fontSize: 12, letterSpacing: 0.9, textTransform: "uppercase", opacity: 0.92 }}>
                   HDUD Notícias
@@ -1453,7 +1987,9 @@ export default function DashboardPage() {
                         {t}
                       </div>
                       <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75, fontWeight: 750 }}>
-                        {formatRelative(new Date(Date.now() - (Math.abs(hashStr(t)) % (18 * 60 * 60 * 1000))).toISOString())}
+                        {formatRelative(
+                          new Date(Date.now() - (Math.abs(hashStr(t)) % (18 * 60 * 60 * 1000))).toISOString()
+                        )}
                       </div>
                     </div>
                   ))}

@@ -15,6 +15,7 @@ import ChaptersPage from "./pages/ChaptersPage";
 import TimelinePage from "./pages/TimelinePage";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
+import NetworkPage from "./pages/NetworkPage";
 
 import {
   setUnauthorizedHandler,
@@ -499,13 +500,20 @@ export default function App() {
         <Route path="/chapters" element={<ChaptersPage />} />
         <Route path="/timeline" element={<TimelinePage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/network" element={<NetworkPage />} />
 
         {/* ✅ Settings agora é 100% paletas (via HdudThemeProvider). */}
         <Route path="/settings" element={<SettingsPage />} />
 
         {/* ✅ Memórias: detalhe antes da lista (garante rota correta /memories/:id) */}
-        <Route path="/memories/:id" element={<MemoryDetailPage token={token} onLogout={handleLogout} />} />
-        <Route path="/memories" element={<MemoriesPage token={token} onLogout={handleLogout} />} />
+        <Route
+          path="/memories/:id"
+          element={<MemoryDetailPage token={token} onLogout={handleLogout} />}
+        />
+        <Route
+          path="/memories"
+          element={<MemoriesPage token={token} onLogout={handleLogout} />}
+        />
       </Route>
 
       <Route path="/" element={<Navigate to={isAuthed ? "/dashboard" : "/login"} replace />} />
